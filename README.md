@@ -1,5 +1,8 @@
 # generation-cache
 
+[![CI](https://github.com/Kronuz/generation-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/generation-cache/actions/workflows/ci.yml)
+
+
 A small, header-only, thread-safe **cache invalidated as a whole group**, for
 C++17 and later.
 

@@ -115,7 +115,7 @@ here needs C++20. No FetchContent, no third-party library.
 
 ## Standalone vs. Detent
 
-This was extracted from [Detent](https://github.com/Kronuz/JustKnobs)'s
+This was extracted from [Detent](https://github.com/Kronuz/Detent)'s
 `detentd` distributor, where an ad hoc composed-diff cache (keyed by a
 poller's last-known version, cleared on every accepted write) had exactly
 this shape and this race. The extracted version here is written fresh and
@@ -123,3 +123,7 @@ generalized (`Key`/`Value` template parameters instead of
 `std::uint64_t`/a Detent-specific patch type); it is not a verbatim copy
 the way some other libraries in this collection are extractions of
 pre-existing Xapiand code.
+
+## CI
+
+The shared cpp-libraries workflow runs on pushes, pull requests, manual dispatch and nightly. It builds and tests Linux GCC/Clang and ARM64, both macOS architectures and FreeBSD, plus Linux ASan/UBSan and TSan. Keep the threaded stale-insert race in the sanitizer jobs; a local smoke pass alone does not qualify changes to synchronization.
