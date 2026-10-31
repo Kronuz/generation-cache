@@ -31,6 +31,16 @@ releases, so entries are dated.
   so a key set cannot be crafted offline to collide in every cache (CR4).
 - The README and header document `std::shared_mutex` fairness (CR4).
 
+### Performance
+
+The rehash fix leaves the read path alone: `get`, `get_with_generation` and
+`find` compile to the same machine code (clang -O3). A/B against the previous
+header on x86_64 Linux (g++ 11.2 -O3, fixed hash seed, `string` keys,
+n = 100000, 12 interleaved runs each, a copy of the old binary as the A/A
+control), mean ns: `get` on 1 thread 393 old, 392 new (old copy 392); 4 threads
+118 old, 121 new (old copy 127); fill 356 old, 354 new. The difference is inside
+the A/A spread.
+
 ## 2026-10-30
 
 ### Changed
