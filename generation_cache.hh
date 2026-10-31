@@ -36,6 +36,7 @@
 #include <mutex>
 #include <cstdint>
 #include <optional>
+#include <random>
 #include <shared_mutex>
 #include <type_traits>
 #include <vector>
@@ -68,8 +69,13 @@ namespace detail {
 		unsigned shift_ = 64;
 		unsigned bits_ = 0;
 
-		static std::uint64_t mix(const Key& k) {
-			std::uint64_t h = static_cast<std::uint64_t>(std::hash<Key>{}(k));
+		// Per-table random seed folded into the hash before mixing, so the
+		// probe sequence is not a fixed function of std::hash and a key set
+		// cannot be crafted offline to collide in every cache.
+		std::uint64_t seed_ = (std::uint64_t(std::random_device{}()) << 32) ^ std::random_device{}();
+
+		std::uint64_t mix(const Key& k) const {
+			std::uint64_t h = static_cast<std::uint64_t>(std::hash<Key>{}(k)) ^ seed_;
 			h *= 0x9E3779B97F4A7C15ULL;
 			h ^= h >> 29;
 			h *= 0xBF58476D1CE4E5B9ULL;
@@ -107,8 +113,11 @@ namespace detail {
 			for (std::size_t i = home(h);; i = (i + 1) & mask) {
 				Slot& s = slots_[i];
 				if (!s.h) {
-					s.h = h;
+					// Construct before publishing the slot: if the Key copy
+					// (or Value move) throws, the slot stays empty (h == 0)
+					// and size_ is untouched (strong guarantee).
 					s.kv.emplace(key, std::move(value));
+					s.h = h;
 					++size_;
 					return;
 				}
@@ -222,7 +231,12 @@ public:
 
 private:
 	// Readers (get, get_with_generation, generation, size) share the lock;
-	// try_insert and clear are exclusive.
+	// try_insert and clear are exclusive. Fairness: std::shared_mutex does not
+	// specify a policy and glibc's default prefers readers, so a continuous
+	// stream of overlapping readers can delay try_insert/clear indefinitely in
+	// theory. Lock hold times here are a single probe, so readers overlap only
+	// briefly in practice; if a workload saturates the readers, shard the cache
+	// or swap in a writer-preferring lock.
 	mutable std::shared_mutex mutex_;
 	typename detail::entries_for<Key, Value>::type entries_;
 	Generation generation_ = 0;

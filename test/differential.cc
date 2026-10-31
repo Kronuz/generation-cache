@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdio>
+#include <new>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -96,7 +97,36 @@ static void run(MakeKey make_key, unsigned seed) {
 	assert(a.size() == b.size() && a.generation() == b.generation());
 }
 
+// A Key whose copy can be made to throw; every key hashes alike so a failed
+// insert's slot is exactly where a later probe for another key lands (CR1).
+struct ThrowKey {
+	int v;
+	static inline bool throw_next = false;
+	ThrowKey(int x) : v(x) {}
+	ThrowKey(const ThrowKey& o) : v(o.v) { if (throw_next) { throw_next = false; throw std::bad_alloc(); } }
+	ThrowKey(ThrowKey&&) = default;
+	ThrowKey& operator=(const ThrowKey&) = default;
+	ThrowKey& operator=(ThrowKey&&) = default;
+	bool operator==(const ThrowKey& o) const { return v == o.v; }
+};
+template <> struct std::hash<ThrowKey> { size_t operator()(const ThrowKey&) const { return 7; } };
+
 int main() {
+	// CR1: a throwing Key copy leaves the cache unchanged and usable.
+	{
+		generation_cache::Cache<ThrowKey, std::string> c;
+		assert(c.try_insert(ThrowKey(1), "a", c.generation()));
+		ThrowKey::throw_next = true;
+		bool threw = false;
+		try { c.try_insert(ThrowKey(2), "b", c.generation()); } catch (const std::bad_alloc&) { threw = true; }
+		assert(threw && c.size() == 1);
+		assert(!c.get(ThrowKey(2)).has_value());
+		assert(!c.get(ThrowKey(3)).has_value());
+		assert(c.get(ThrowKey(1)).value() == "a");
+		assert(c.try_insert(ThrowKey(2), "b", c.generation()));
+		assert(c.size() == 2 && c.get(ThrowKey(2)).value() == "b");
+	}
+
 	for (unsigned seed = 1; seed <= 5; ++seed) {
 		run<std::string>([](std::uint64_t n) { return n ? "key-" + std::to_string(n) : std::string(); }, seed);
 		run<int>([](std::uint64_t n) { return int(n); }, seed);

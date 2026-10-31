@@ -131,11 +131,17 @@ All methods are thread-safe (one internal `std::shared_mutex` guards the table
 and the generation counter together, so a lookup and a `clear()` can never
 interleave inconsistently). `get`, `get_with_generation`, `generation` and
 `size` take it shared, so readers run in parallel; `try_insert` and `clear`
-take it exclusively.
+take it exclusively. `std::shared_mutex` has no specified fairness policy
+(glibc prefers readers), so readers that overlap continuously can in theory
+delay `try_insert`/`clear`; each hold is a single probe, so this is not seen in
+practice, but shard the cache if a workload saturates it with readers.
+`try_insert` has the strong exception guarantee: if copying the key throws, the
+cache is unchanged.
 
 **Performance note.** Entries have no exposed order, so when `Key` has a
 `std::hash` and `operator==` they live in a small open-addressing table (linear
-probing, load <= 0.5, the 64-bit hash stored per slot); a `Key` with only
+probing, load <= 0.5, the 64-bit hash stored per slot, mixed with a per-cache random seed so probe
+sequences are not predictable from `std::hash`); a `Key` with only
 `operator<` falls back to `std::map` and still compiles. On Apple arm64 with
 string keys (`get` hit, n = 100000, shared machine, so absolute numbers are
 noisy): 446 -> 116 ns single thread, 2141 -> 294 ns at 4 threads, against
