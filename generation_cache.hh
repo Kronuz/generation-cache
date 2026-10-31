@@ -145,10 +145,8 @@ namespace detail {
 		std::size_t size() const { return m_.size(); }
 	};
 
-	// Entries have no exposed order, so the container is an implementation
-	// choice: a hash table (one probe instead of a tree walk of string
-	// compares) when the key allows it, the original ordered map otherwise
-	// (a Key that only has operator< still compiles).
+	// A hash table when Key has std::hash and ==; otherwise a std::map, so a
+	// Key with only operator< still compiles.
 	template <typename Key, typename Value, bool = is_hashable<Key>::value>
 	struct entries_for { using type = hash_entries<Key, Value>; };
 	template <typename Key, typename Value>
@@ -230,13 +228,8 @@ public:
 	}
 
 private:
-	// Readers (get, get_with_generation, generation, size) share the lock;
-	// try_insert and clear are exclusive. Fairness: std::shared_mutex does not
-	// specify a policy and glibc's default prefers readers, so a continuous
-	// stream of overlapping readers can delay try_insert/clear indefinitely in
-	// theory. Lock hold times here are a single probe, so readers overlap only
-	// briefly in practice; if a workload saturates the readers, shard the cache
-	// or swap in a writer-preferring lock.
+	// Readers share the lock; try_insert and clear are exclusive. Fairness is
+	// unspecified (glibc prefers readers); see the README.
 	mutable std::shared_mutex mutex_;
 	typename detail::entries_for<Key, Value>::type entries_;
 	Generation generation_ = 0;

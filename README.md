@@ -10,26 +10,25 @@ C++17 and later.
 
 ## What it is
 
-Most caches evict by recency (LRU) or age (TTL) -- see
+Most caches evict by recency (LRU) or age (TTL); see
 [`lru-cache`](https://github.com/Kronuz/lru-cache) for that shape. This one is
 for a different, common case: many readers derive a `Value` from some `Key`
 against a single shared, mutable source of truth. That source changes as a
 discrete sequence of events (a write, a new version, an accepted update), not
 continuously. Every cached `Value` is valid between two consecutive events and
-invalid the instant the next one lands -- there is no "older but still useful"
+invalid the instant the next one lands. There is no "older but still useful"
 state, so there is nothing for LRU or TTL to rank.
 
 `generation_cache::Cache<Key, Value>` models exactly that: a `clear()` call
 invalidates every entry at once and advances an internal generation counter.
 A result computed from the OLD state, but not yet inserted when `clear()`
-runs, is detected and silently dropped instead of resurrecting stale data --
-this is the race the generation counter exists to close, not just a cache
-API nicety.
+runs, is detected and silently dropped instead of resurrecting stale data.
+Closing that race is what the generation counter is for.
 
 ## Install
 
 Header-only: `generation_cache.hh` is the whole library. Requires C++17
-(`std::optional`) and nothing else beyond the standard library.
+(`std::optional`, `std::shared_mutex`) and nothing beyond the standard library.
 
 With CMake `FetchContent`:
 
@@ -77,8 +76,8 @@ cache.clear(); // every cached value was relative to the OLD state
 
 `try_insert` only commits if `lookup.generation` still matches the cache's
 current generation. If a `clear()` happened between the `get_with_generation`
-call and the `try_insert` call -- e.g. because `expensive_compute` took a
-while and a write landed in the meantime -- the insert is silently dropped:
+call and the `try_insert` call (because `expensive_compute` took a while and
+a write landed in the meantime, say), the insert is silently dropped:
 the next reader recomputes against the new state instead of seeing a value
 computed from the old one.
 
@@ -116,46 +115,55 @@ public:
 } // namespace generation_cache
 ```
 
-- **`generation()`** -- the current generation, if you want to snapshot it
+- **`generation()`**: the current generation, if you want to snapshot it
   separately from a lookup.
-- **`get(key)`** -- a plain lookup; `std::nullopt` on a miss.
-- **`get_with_generation(key)`** -- a lookup plus the generation it was read
+- **`get(key)`**: a plain lookup; `std::nullopt` on a miss.
+- **`get_with_generation(key)`**: a lookup plus the generation it was read
   at, for a caller about to recompute on a miss.
-- **`try_insert(key, value, at_generation)`** -- commits only if
+- **`try_insert(key, value, at_generation)`**: commits only if
   `at_generation` still matches the current generation; returns whether it
-  committed. Never throws, never corrupts an already-current entry.
-- **`clear()`** -- drops every entry and advances the generation.
-- **`size()`** -- current entry count.
+  committed. A stale call never throws and never overwrites a current entry.
+- **`clear()`**: drops every entry and advances the generation.
+- **`size()`**: current entry count.
 
 All methods are thread-safe (one internal `std::shared_mutex` guards the table
 and the generation counter together, so a lookup and a `clear()` can never
 interleave inconsistently). `get`, `get_with_generation`, `generation` and
 `size` take it shared, so readers run in parallel; `try_insert` and `clear`
 take it exclusively. `std::shared_mutex` has no specified fairness policy
-(glibc prefers readers), so readers that overlap continuously can in theory
-delay `try_insert`/`clear`; each hold is a single probe, so this is not seen in
-practice, but shard the cache if a workload saturates it with readers.
+(glibc prefers readers), so readers that overlap continuously can delay
+`try_insert`/`clear`. Each hold is a single probe, so readers overlap only
+briefly; shard the cache if a workload saturates it with readers.
 `try_insert` has the strong exception guarantee: if copying the key throws, the
 cache is unchanged.
 
-**Performance note.** Entries have no exposed order, so when `Key` has a
-`std::hash` and `operator==` they live in a small open-addressing table (linear
-probing, load <= 0.5, the 64-bit hash stored per slot, mixed with a per-cache random seed so probe
-sequences are not predictable from `std::hash`); a `Key` with only
-`operator<` falls back to `std::map` and still compiles. On Apple arm64 with
-string keys (`get` hit, n = 100000, shared machine, so absolute numbers are
-noisy): 446 -> 116 ns single thread, 2141 -> 294 ns at 4 threads, against
-`shared_mutex` + `absl::flat_hash_map` at 99 / 284 ns. Run `generation_cache_bench`.
+Entries have no exposed order. When `Key` has a `std::hash` and `operator==`,
+they live in a small open-addressing table: linear probing, load <= 0.5, and the
+64-bit hash stored per slot. The hash is mixed with a per-cache random seed, so
+probe sequences are not predictable from `std::hash`. A `Key` with only
+`operator<` uses `std::map`.
+
+## Performance
+
+Apple arm64, string keys, `get` hit, n = 100000, on a shared machine (absolute
+numbers are noisy): 116 ns per op on one thread and 294 ns at 4 threads.
+`std::shared_mutex` plus `absl::flat_hash_map` measures 99 and 284 ns on the
+same run. The benchmark needs abseil installed:
+
+```sh
+cmake -B build && cmake --build build --target generation_cache_bench
+./build/generation_cache_bench
+```
 
 ## What it isn't
 
-- Not an LRU or TTL cache -- entries don't expire individually or by access
+- Not an LRU or TTL cache. Entries don't expire individually or by access
   recency. Use [`lru-cache`](https://github.com/Kronuz/lru-cache) for that.
-- Not lock-free -- one reader/writer lock per `Cache` instance. For this library's
+- Not lock-free. Each `Cache` instance has one reader/writer lock. For this library's
   motivating case (an occasional write, many reads composing a moderately
   expensive result), mutex contention on the cache itself is not the
   bottleneck; the work it's caching is.
-- Not bounded by itself -- nothing here caps `size()`. In the motivating case,
+- Not bounded by itself. Nothing here caps `size()`. In the motivating case,
   the number of distinct `Key`s ever reachable is naturally bounded by
   whatever upstream window the `Value`s are computed from (see
   [ARCHITECTURE.md](ARCHITECTURE.md)); a use case without such a natural bound
@@ -169,8 +177,9 @@ cmake -B build && cmake --build build && ctest --test-dir build
 
 The test covers the ordinary hit/miss path, `clear()` dropping every entry,
 a stale `try_insert` (captured generation older than current) being silently
-rejected, and a multi-threaded `try_insert`/`clear` race run under
-TSan/ASan in CI to confirm no data race, not just no visible corruption.
+rejected, and a multi-threaded `try_insert`/`clear` race that CI runs under
+TSan and ASan to catch data races. `test/differential.cc` checks the cache
+against a reference implementation.
 
 ## Examples
 
@@ -185,11 +194,11 @@ and the cache correctly recomputing once and then re-warming.
 
 ## Provenance
 
-Extracted from [Detent](https://github.com/Kronuz/JustKnobs), where it
-replaced an ad hoc composed-diff cache in the distributor's HTTP layer (many
-pollers behind the same base version all paying to recompute the identical
-diff). See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
-[AGENTS.md](AGENTS.md) for the repo map and invariants.
+Extracted from [Detent](https://github.com/Kronuz/Detent), where it caches
+composed diffs in the distributor's HTTP layer, so many pollers behind the same
+base version share one computed diff. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for the design, [AGENTS.md](AGENTS.md) for the repo map and invariants, and
+[CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## License
 

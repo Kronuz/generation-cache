@@ -12,7 +12,9 @@ A single header, nothing else:
 ```
 
 No compiled translation unit, no external dependency. `generation_cache.hh`
-includes only `<map>`, `<shared_mutex>`, `<vector>`, `<cstdint>`, `<optional>`, and `<utility>`.
+includes only standard headers: `<map>`, `<mutex>`, `<shared_mutex>`,
+`<vector>`, `<cstdint>`, `<optional>`, `<random>`, `<type_traits>`, and
+`<utility>`.
 
 ## The problem this solves
 
@@ -23,12 +25,12 @@ individually.
 
 The motivating case here doesn't fit either model. Picture a server with one
 piece of mutable state (a version counter, say) that changes in discrete
-steps -- an accepted write, a new commit. Many readers derive a `Value` (e.g.
+steps: an accepted write, a new commit. Many readers derive a `Value` (e.g.
 a diff from some `Key`, a base version, to the current state) from that
 state. Every `Value` computed before step N is valid until step N+1 arrives,
 and then EVERY one of them is wrong at once, regardless of how recently or
 often each was used. There is no partial staleness and no useful recency
-ordering -- an entry is either exactly current or completely wrong.
+ordering. An entry is either exactly current or completely wrong.
 
 So the right invalidation unit isn't the entry, it's the whole cache, and the
 right trigger isn't time or access pattern, it's "the thing I was computed
@@ -38,8 +40,8 @@ arrived too late to be trusted.
 
 ## The race `clear()` has to defend against
 
-A naive version of this cache -- a plain `std::map` behind a mutex, with
-`clear()` to invalidate -- has a real bug. A reader's full sequence is:
+A naive version of this cache, a plain `std::map` behind a mutex with
+`clear()` to invalidate, has a real bug. A reader's full sequence is:
 
 1. Look up `key`; miss.
 2. Compute `value` (this can take real time: parsing, merging, serializing).
@@ -65,9 +67,8 @@ and the snapshot). At step 3, `try_insert` compares that captured value
 against the CURRENT generation under the same mutex `clear()` uses. If a
 `clear()` ran in between, the generation moved, the insert is silently
 rejected, and the next reader recomputes against the now-current state
-instead. The race isn't prevented by making the reader faster or taking a
-bigger lock across the whole compute -- it is turned into a detectable,
-cheap-to-check condition instead.
+instead. The race becomes a detectable, cheap-to-check condition, without
+holding a lock across the whole compute.
 
 ## One lock, shared for reads
 
@@ -84,7 +85,11 @@ No iteration order is exposed, so the container is free. A hashable `Key`
 (`std::hash` plus `==`) uses `detail::hash_entries`: insert/replace/find/clear
 only (no single-entry erase, hence no tombstones), linear probing, load <= 0.5,
 the mixed 64-bit hash kept in each slot so most probes never touch the key. Any
-other `Key` uses `detail::ordered_entries`, a thin `std::map` adapter.
+other `Key` uses `detail::ordered_entries`, a thin `std::map` adapter. The
+table mixes a per-cache random seed into `std::hash` before probing, so a key
+set cannot be crafted offline to collide in every cache. `insert_or_assign`
+constructs the entry before it publishes the slot's hash and bumps the size, so
+a throwing `Key` copy leaves the table unchanged.
 
 ## Why no built-in size bound
 
@@ -96,7 +101,7 @@ some other way, reintroducing the complexity this cache exists to avoid.
 In the motivating case, the bound comes from upstream: the Detent
 distributor this was extracted from only ever composes diffs from a bounded
 sliding window of retained history (`max_diff_history` entries), so at most
-that many distinct `Key`s are ever reachable at once -- the cache is
+that many distinct `Key`s are ever reachable at once. The cache is
 implicitly bounded by its caller's own domain, without needing to track or
 enforce a bound itself. A caller without such a natural bound needs its own
 cap, layered on top (e.g. clearing early if `size()` crosses a threshold).

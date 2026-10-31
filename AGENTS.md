@@ -12,6 +12,11 @@ generation_cache.hh   The whole library: templated Cache<Key, Value>.
 test/test.cc          Runnable smoke test: hit/miss, clear(), stale-insert
                        rejection, and a threaded try_insert/clear race (run
                        under TSan/ASan in CI).
+test/differential.cc   Differential test against a frozen reference cache;
+                       CTest test `generation_cache_differential`.
+bench/bench.cc         Benchmark against std::mutex / std::shared_mutex plus
+                       absl::flat_hash_map; target `generation_cache_bench`,
+                       built only when abseil is found.
 examples/demo.cc       A runnable tour (not a test): a warm cache, a source
                        change, a recompute.
 CMakeLists.txt         Header-only INTERFACE target `generation_cache`
@@ -19,9 +24,10 @@ CMakeLists.txt         Header-only INTERFACE target `generation_cache`
                        FetchContent, no external dependency; CTest test
                        `generation_cache`.
 LICENSE                MIT, Copyright (c) 2026 Germán Méndez Bravo.
-README.md              What it is, install, usage, API, what it isn't.
+README.md              What it is, install, usage, API, performance, what it isn't.
+CHANGELOG.md           Dated changes.
 ARCHITECTURE.md        Internal design: the race clear() defends against,
-                       why one mutex, why no built-in size bound.
+                       the shared lock, the container, why no built-in size bound.
 ```
 
 Header-only. There is no `.cc` to compile; `generation_cache.hh` is both the
@@ -59,9 +65,10 @@ ASLR) rather than chasing it as a code issue.
 
 ## Dependencies
 
-None beyond the standard library: `<map>`, `<mutex>`, `<cstdint>`,
-`<optional>`, `<utility>`. C++17 is the floor (`std::optional`); nothing
-here needs C++20. No FetchContent, no third-party library.
+None beyond the standard library (ARCHITECTURE.md lists the headers). C++17
+is the floor (`std::optional`, `std::shared_mutex`); nothing here needs C++20.
+No FetchContent and no third-party library in the library target; the
+benchmark alone uses abseil.
 
 ## Conventions
 
@@ -71,10 +78,10 @@ here needs C++20. No FetchContent, no third-party library.
 - Tabs for indentation, double quotes in code, no em dashes in prose.
 - MIT-licensed; keep the copyright header (Copyright (c) 2026 Germán Méndez
   Bravo) on source files.
-- One mutex, guarding the map and the generation counter together (see
-  ARCHITECTURE.md's "why one mutex" section). Don't split it into a
-  `shared_mutex` or per-bucket locking without re-reading why that was
-  deliberately avoided -- the generation-check race-freedom depends on it.
+- One `std::shared_mutex` guards the table and the generation counter
+  together (see ARCHITECTURE.md's "One lock, shared for reads"). Readers take
+  it shared; `try_insert` and `clear` take it exclusively. Don't split it into
+  per-bucket locks: the generation check's race-freedom depends on one lock.
 
 ## Load-bearing invariants
 
