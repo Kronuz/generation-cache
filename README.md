@@ -127,15 +127,25 @@ public:
 - **`clear()`** -- drops every entry and advances the generation.
 - **`size()`** -- current entry count.
 
-All methods are thread-safe (one internal mutex guards the map and the
-generation counter together, so a lookup and a `clear()` can never interleave
-inconsistently).
+All methods are thread-safe (one internal `std::shared_mutex` guards the table
+and the generation counter together, so a lookup and a `clear()` can never
+interleave inconsistently). `get`, `get_with_generation`, `generation` and
+`size` take it shared, so readers run in parallel; `try_insert` and `clear`
+take it exclusively.
+
+**Performance note.** Entries have no exposed order, so when `Key` has a
+`std::hash` and `operator==` they live in a small open-addressing table (linear
+probing, load <= 0.5, the 64-bit hash stored per slot); a `Key` with only
+`operator<` falls back to `std::map` and still compiles. On Apple arm64 with
+string keys (`get` hit, n = 100000, shared machine, so absolute numbers are
+noisy): 446 -> 116 ns single thread, 2141 -> 294 ns at 4 threads, against
+`shared_mutex` + `absl::flat_hash_map` at 99 / 284 ns. Run `generation_cache_bench`.
 
 ## What it isn't
 
 - Not an LRU or TTL cache -- entries don't expire individually or by access
   recency. Use [`lru-cache`](https://github.com/Kronuz/lru-cache) for that.
-- Not lock-free -- one mutex per `Cache` instance. For this library's
+- Not lock-free -- one reader/writer lock per `Cache` instance. For this library's
   motivating case (an occasional write, many reads composing a moderately
   expensive result), mutex contention on the cache itself is not the
   bottleneck; the work it's caching is.

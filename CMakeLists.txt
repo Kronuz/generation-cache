@@ -25,6 +25,20 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(generation_cache_test PRIVATE generation_cache Threads::Threads)
   add_test(NAME generation_cache COMMAND generation_cache_test)
 
+  # Differential test against a frozen copy of the original std::map + std::mutex cache.
+  add_executable(generation_cache_differential test/differential.cc)
+  target_link_libraries(generation_cache_differential PRIVATE generation_cache Threads::Threads)
+  add_test(NAME generation_cache_differential COMMAND generation_cache_differential)
+
+  # Benchmark (not built by default): cmake --build build --target generation_cache_bench
+  # The comparator (abseil flat_hash_map) is found only for this target.
+  find_package(absl QUIET)
+  if(absl_FOUND)
+    add_executable(generation_cache_bench EXCLUDE_FROM_ALL bench/bench.cc)
+    target_link_libraries(generation_cache_bench PRIVATE generation_cache Threads::Threads absl::flat_hash_map)
+    target_compile_options(generation_cache_bench PRIVATE -O3 -DNDEBUG)
+  endif()
+
   # A runnable tour of the library (not a test): build & run
   # ./build/generation_cache_demo
   add_executable(generation_cache_demo examples/demo.cc)

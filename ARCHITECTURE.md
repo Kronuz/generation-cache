@@ -12,7 +12,7 @@ A single header, nothing else:
 ```
 
 No compiled translation unit, no external dependency. `generation_cache.hh`
-includes only `<map>`, `<mutex>`, `<cstdint>`, `<optional>`, and `<utility>`.
+includes only `<map>`, `<shared_mutex>`, `<vector>`, `<cstdint>`, `<optional>`, and `<utility>`.
 
 ## The problem this solves
 
@@ -69,17 +69,22 @@ instead. The race isn't prevented by making the reader faster or taking a
 bigger lock across the whole compute -- it is turned into a detectable,
 cheap-to-check condition instead.
 
-## Why one mutex, not finer-grained locking
+## One lock, shared for reads
 
-The map and the generation counter are guarded by the same `std::mutex`,
-and every public method takes it for its whole body. This is deliberately not
-a `shared_mutex` with reader/writer separation: the work this cache is meant
-to short-circuit (diff composition, patch merging, serialization) is
-expected to dominate actual map access time by orders of magnitude, so
-contention on the map itself is not where the cost lives. Keeping one mutex
-keeps `try_insert`'s generation check trivially race-free against `clear()`
--- the property the whole design depends on -- rather than trading that
-simplicity for reader/writer parallelism the use case doesn't need.
+The table and the generation counter are guarded by one `std::shared_mutex`.
+Readers (`get`, `get_with_generation`, `generation`, `size`) take it shared;
+`try_insert` and `clear` take it exclusively, and `try_insert` checks the
+generation under that exclusive lock, so the check stays race-free against
+`clear()`, the property the whole design depends on. A reader's table probe is
+short, so a single lock is enough; there is no finer-grained locking.
+
+## Container choice
+
+No iteration order is exposed, so the container is free. A hashable `Key`
+(`std::hash` plus `==`) uses `detail::hash_entries`: insert/replace/find/clear
+only (no single-entry erase, hence no tombstones), linear probing, load <= 0.5,
+the mixed 64-bit hash kept in each slot so most probes never touch the key. Any
+other `Key` uses `detail::ordered_entries`, a thin `std::map` adapter.
 
 ## Why no built-in size bound
 
