@@ -89,7 +89,15 @@ other `Key` uses `detail::ordered_entries`, a thin `std::map` adapter. The
 table mixes a per-cache random seed into `std::hash` before probing, so a key
 set cannot be crafted offline to collide in every cache. `insert_or_assign`
 constructs the entry before it publishes the slot's hash and bumps the size, so
-a throwing `Key` copy leaves the table unchanged.
+a throwing `Key` copy leaves the table unchanged. `grow()` builds the next table
+in a local vector (new shift included) and swaps it in only after every entry is
+placed, so a throw while allocating or moving leaves the old table untouched. It
+moves entries when `Key` and `Value` are both nothrow-move-constructible and
+copies them otherwise (the decision is per pair, never per member, so a failed
+copy never follows a moved-from key); a move-only type whose move can throw has
+no safe choice and gets the basic guarantee, as `std::vector` does.
+`ordered_entries` uses `std::map::insert_or_assign`, which builds a new node
+from the value before linking it.
 
 ## Why no built-in size bound
 

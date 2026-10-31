@@ -134,8 +134,20 @@ take it exclusively. `std::shared_mutex` has no specified fairness policy
 (glibc prefers readers), so readers that overlap continuously can delay
 `try_insert`/`clear`. Each hold is a single probe, so readers overlap only
 briefly; shard the cache if a workload saturates it with readers.
-`try_insert` has the strong exception guarantee: if copying the key throws, the
-cache is unchanged.
+`try_insert` has the strong exception guarantee: if anything throws (a `Key`
+copy, a `Value` move or copy, an allocation, the table's rehash), the cache is
+unchanged and still usable. The rehash builds the new table completely before
+it replaces the old one, and moves entries only when `Key` and `Value` are
+nothrow-move-constructible, copying them otherwise. A move-only type whose move
+can throw gets the basic guarantee instead, as with `std::vector`, and
+overwriting an existing key assigns `Value`, which is strong only if its move
+assignment cannot throw.
+
+Behavior change: before 2026-10-31 a throw during a rehash (a `Key` or `Value`
+move or copy that throws, or `std::bad_alloc`) lost entries and could leave a
+slot that a later `get` dereferenced while empty; a throwing `Value` move
+assignment on a `Key` with only `operator<` left a default-constructed entry
+behind. Results change only on those throwing paths.
 
 Entries have no exposed order. When `Key` has a `std::hash` and `operator==`,
 they live in a small open-addressing table: linear probing, load <= 0.5, and the
@@ -179,7 +191,10 @@ The test covers the ordinary hit/miss path, `clear()` dropping every entry,
 a stale `try_insert` (captured generation older than current) being silently
 rejected, and a multi-threaded `try_insert`/`clear` race that CI runs under
 TSan and ASan to catch data races. `test/differential.cc` checks the cache
-against a reference implementation.
+against a reference implementation. `test/exception_safety.cc` injects throwing
+copies and moves and `std::bad_alloc` at every point of an insert sequence that
+crosses several rehashes, and checks the cache against a `std::map` model after
+each failure.
 
 ## Examples
 

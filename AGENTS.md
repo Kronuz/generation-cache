@@ -14,6 +14,10 @@ test/test.cc          Runnable smoke test: hit/miss, clear(), stale-insert
                        under TSan/ASan in CI).
 test/differential.cc   Differential test against a frozen reference cache;
                        CTest test `generation_cache_differential`.
+test/exception_safety.cc  Injects throwing Key/Value copies and moves and
+                       bad_alloc across several rehashes; checks a std::map
+                       model after every failure; CTest test
+                       `generation_cache_exception_safety`.
 bench/bench.cc         Benchmark against std::mutex / std::shared_mutex plus
                        absl::flat_hash_map; target `generation_cache_bench`,
                        built only when abseil is found.
@@ -98,6 +102,11 @@ benchmark alone uses abseil.
   "fast clear" that only bumps the generation and lazily drops entries)
   would need every read path to also re-check staleness per-entry, which
   this design deliberately avoids by making `clear()` a hard cutover.
+- **`grow()` builds the whole new table before it touches the old one.**
+  Never mutate `slots_`, `shift_` or `bits_` before every entry is placed,
+  and never move entries unless both `Key` and `Value` are nothrow-move
+  (copy otherwise). A throw mid-rehash must leave the cache as it was;
+  `test/exception_safety.cc` fails if it does not.
 - **Don't add an eviction policy (LRU/TTL/LFU/size cap) to this class.**
   That's a different, already-solved problem --
   [`lru-cache`](https://github.com/Kronuz/lru-cache) -- with a

@@ -30,6 +30,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(generation_cache_differential PRIVATE generation_cache Threads::Threads)
   add_test(NAME generation_cache_differential COMMAND generation_cache_differential)
 
+  # Strong exception guarantee: throwing Key/Value copies and moves and injected
+  # bad_alloc at every point of an insert sequence that crosses several rehashes.
+  add_executable(generation_cache_exception_safety test/exception_safety.cc)
+  target_link_libraries(generation_cache_exception_safety PRIVATE generation_cache Threads::Threads)
+  add_test(NAME generation_cache_exception_safety COMMAND generation_cache_exception_safety)
+
   # Benchmark (not built by default): cmake --build build --target generation_cache_bench
   # The comparator (abseil flat_hash_map) is found only for this target.
   find_package(absl QUIET)

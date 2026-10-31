@@ -83,17 +83,31 @@ namespace detail {
 		}
 		std::size_t home(std::uint64_t h) const { return static_cast<std::size_t>(h >> shift_); }
 
+		// Strong guarantee: the new table is built completely (in a local
+		// vector, with the new shift) before it replaces the old one, and the
+		// entries are moved only when that cannot throw, otherwise copied, so
+		// a throw leaves the old table untouched.
 		void grow() {
-			bits_ = bits_ ? bits_ + 1 : 4;  // 16 slots first
-			std::vector<Slot> old(std::size_t(1) << bits_);
-			old.swap(slots_);
-			shift_ = 64 - bits_;
-			for (auto& s : old) {
+			const unsigned bits = bits_ ? bits_ + 1 : 4;  // 16 slots first
+			const unsigned shift = 64 - bits;
+			std::vector<Slot> next(std::size_t(1) << bits);
+			const std::size_t mask = next.size() - 1;
+			for (auto& s : slots_) {
 				if (!s.h) continue;
-				std::size_t i = home(s.h);
-				while (slots_[i].h) i = (i + 1) & (slots_.size() - 1);
-				slots_[i] = std::move(s);
+				std::size_t i = static_cast<std::size_t>(s.h >> shift);
+				while (next[i].h) i = (i + 1) & mask;
+				if constexpr (std::is_nothrow_move_constructible_v<Key> && std::is_nothrow_move_constructible_v<Value>) {
+					next[i].kv.emplace(std::move(s.kv->first), std::move(s.kv->second));
+				} else if constexpr (std::is_copy_constructible_v<Key> && std::is_copy_constructible_v<Value>) {
+					next[i].kv.emplace(s.kv->first, s.kv->second);
+				} else {
+					next[i].kv.emplace(std::move(s.kv->first), std::move(s.kv->second));
+				}
+				next[i].h = s.h;
 			}
+			slots_.swap(next);
+			bits_ = bits;
+			shift_ = shift;
 		}
 	public:
 		const Value* find(const Key& key) const {
@@ -122,6 +136,8 @@ namespace detail {
 					return;
 				}
 				if (s.h == h && s.kv->first == key) {
+					// Overwrite: strong only if Value's move assignment cannot
+					// throw (a throwing one can leave the old value half-assigned).
 					s.kv->second = std::move(value);
 					return;
 				}
@@ -140,7 +156,10 @@ namespace detail {
 			auto it = m_.find(key);
 			return it == m_.end() ? nullptr : &it->second;
 		}
-		void insert_or_assign(const Key& key, Value&& value) { m_[key] = std::move(value); }
+		// insert_or_assign constructs a new node from the value, so a throw
+		// leaves the map unchanged; m_[key] = ... would first insert a
+		// default-constructed Value and keep it if the assignment threw.
+		void insert_or_assign(const Key& key, Value&& value) { m_.insert_or_assign(key, std::move(value)); }
 		void clear() { m_.clear(); }
 		std::size_t size() const { return m_.size(); }
 	};
