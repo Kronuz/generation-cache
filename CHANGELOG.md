@@ -6,6 +6,12 @@ releases, so entries are dated.
 
 ## 2026-11-01
 
+### Added
+
+- `generation_cache_bench` checks, before timing, that every comparator returns the same
+  result as `Cache` for every key it looks up, and aborts on a mismatch. `generation_cache_bench check`
+  runs only that check, and CTest runs it as `generation_cache_bench_check` when the benchmark is built.
+
 ### Changed
 
 - `generation_cache_bench` builds only with `-DGENERATION_CACHE_BUILD_BENCH=ON`. Abseil is

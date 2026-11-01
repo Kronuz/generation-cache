@@ -27,9 +27,11 @@ test/first_insert.cc    The table allocates nothing until the first insert, then
 test/seed.cc           Constructing a Cache cannot throw when the entropy source
                        does (GENERATION_CACHE_ENTROPY); CTest test
                        `generation_cache_seed`.
-bench/bench.cc         Benchmark against the original std::map + std::mutex cache and,
+bench/bench.cc         Benchmark against a std::map + std::mutex cache and,
                        when abseil is found, absl::flat_hash_map behind a mutex and
-                       a shared_mutex, with small-cache rows; target
+                       a shared_mutex, with small-cache rows; it first checks that
+                       every comparator returns Cache's results (`check` runs only
+                       that; CTest test `generation_cache_bench_check`). Target
                        `generation_cache_bench`, built with
                        GENERATION_CACHE_BUILD_BENCH=ON.
 examples/demo.cc       A runnable tour (not a test): a warm cache, a source
