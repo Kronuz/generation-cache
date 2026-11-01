@@ -18,6 +18,9 @@ test/exception_safety.cc  Injects throwing Key/Value copies and moves and
                        bad_alloc across several rehashes; checks a std::map
                        model after every failure; CTest test
                        `generation_cache_exception_safety`.
+test/seed.cc           Constructing a Cache cannot throw when the entropy source
+                       does (GENERATION_CACHE_ENTROPY); CTest test
+                       `generation_cache_seed`.
 bench/bench.cc         Benchmark against std::mutex / std::shared_mutex plus
                        absl::flat_hash_map; target `generation_cache_bench`,
                        built only when abseil is found.
@@ -86,6 +89,9 @@ benchmark alone uses abseil.
   together (see ARCHITECTURE.md's "One lock, shared for reads"). Readers take
   it shared; `try_insert` and `clear` take it exclusively. Don't split it into
   per-bucket locks: the generation check's race-freedom depends on one lock.
+- Constructing a `Cache` does not throw. The hash seed comes from
+  `detail::process_seed()`, which swallows a failing entropy source;
+  `GENERATION_CACHE_ENTROPY` names the source (`test/seed.cc` makes it throw).
 
 ## Load-bearing invariants
 

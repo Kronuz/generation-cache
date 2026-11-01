@@ -141,7 +141,7 @@ it replaces the old one, and moves entries only when `Key` and `Value` are
 nothrow-move-constructible, copying them otherwise. A move-only type whose move
 can throw gets the basic guarantee instead, as with `std::vector`, and
 overwriting an existing key assigns `Value`, which is strong only if its move
-assignment cannot throw.
+assignment cannot throw. Constructing a `Cache` never throws.
 
 Behavior change: before 2026-10-31 a throw during a rehash (a `Key` or `Value`
 move or copy that throws, or `std::bad_alloc`) lost entries and could leave a
@@ -151,9 +151,14 @@ behind. Results change only on those throwing paths.
 
 Entries have no exposed order. When `Key` has a `std::hash` and `operator==`,
 they live in a small open-addressing table: linear probing, load <= 0.5, and the
-64-bit hash stored per slot. The hash is mixed with a per-cache random seed, so
-probe sequences are not predictable from `std::hash`. A `Key` with only
-`operator<` uses `std::map`.
+64-bit hash stored per slot. The hash is mixed with a seed drawn once per process
+(from `std::random_device`, mixed with the clock, the thread id and an address,
+so an entropy source that fails costs quality and never an exception) and varied
+per table, so the index of a key is not a function of `std::hash` alone. The seed
+spreads the indexes of keys whose `std::hash` values differ. Keys with equal
+`std::hash` values collide in every cache, and the standard library's string
+hashes are unseeded, so a caller that must withstand crafted keys needs its own
+`std::hash`. A `Key` with only `operator<` uses `std::map`.
 
 ## Performance
 

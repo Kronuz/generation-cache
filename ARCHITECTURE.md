@@ -12,9 +12,9 @@ A single header, nothing else:
 ```
 
 No compiled translation unit, no external dependency. `generation_cache.hh`
-includes only standard headers: `<map>`, `<mutex>`, `<shared_mutex>`,
-`<vector>`, `<cstdint>`, `<optional>`, `<random>`, `<type_traits>`, and
-`<utility>`.
+includes only standard headers: `<chrono>`, `<cstdint>`, `<functional>`,
+`<map>`, `<mutex>`, `<optional>`, `<random>`, `<shared_mutex>`, `<thread>`,
+`<type_traits>`, `<vector>`, and `<utility>`.
 
 ## The problem this solves
 
@@ -86,8 +86,14 @@ No iteration order is exposed, so the container is free. A hashable `Key`
 only (no single-entry erase, hence no tombstones), linear probing, load <= 0.5,
 the mixed 64-bit hash kept in each slot so most probes never touch the key. Any
 other `Key` uses `detail::ordered_entries`, a thin `std::map` adapter. The
-table mixes a per-cache random seed into `std::hash` before probing, so a key
-set cannot be crafted offline to collide in every cache. `insert_or_assign`
+table mixes a seed into `std::hash` before probing: one value drawn per process
+on first use (`detail::process_seed`: `std::random_device`, the clock, the
+thread id and an address, mixed; a failing entropy source costs quality, not an
+exception, so constructing a `Cache` never throws), varied by the table's
+address. The seed moves the table index of keys with different `std::hash`
+values. It cannot separate keys whose `std::hash` values are equal, so it
+does not defend against a hash function whose collisions can be computed.
+`insert_or_assign`
 constructs the entry before it publishes the slot's hash and bumps the size, so
 a throwing `Key` copy leaves the table unchanged. `grow()` builds the next table
 in a local vector (new shift included) and swaps it in only after every entry is

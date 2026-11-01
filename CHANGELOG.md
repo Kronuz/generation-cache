@@ -30,6 +30,21 @@ releases, so entries are dated.
 - The hash table folds a per-cache random seed into `std::hash` before mixing,
   so a key set cannot be crafted offline to collide in every cache (CR4).
 - The README and header document `std::shared_mutex` fairness (CR4).
+- The hash seed is drawn once per process, not by two `std::random_device` draws in every
+  cache: a cache's construction was dominated by them (audit finding CA4). A table varies the
+  process seed by its own address. Constructing a `Cache` cannot throw: an entropy source
+  that fails costs seed quality (the clock, the thread id and an address are mixed in), never
+  an exception (the system review note). `GENERATION_CACHE_ENTROPY` names the source, which is
+  how `test/seed.cc` makes it throw.
+- The README and ARCHITECTURE.md no longer say a key set "cannot be crafted offline to
+  collide" (the CR4 bullet above made the same claim): the seed spreads the table indexes of
+  keys whose `std::hash` values differ, and keys with equal `std::hash` values collide in
+  every cache.
+
+### Added
+
+- `test/seed.cc`: a `Cache` is constructed, filled across several rehashes and cleared while
+  the entropy source throws.
 
 ### Performance
 

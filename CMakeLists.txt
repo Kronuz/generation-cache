@@ -36,6 +36,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(generation_cache_exception_safety PRIVATE generation_cache Threads::Threads)
   add_test(NAME generation_cache_exception_safety COMMAND generation_cache_exception_safety)
 
+  # Constructing a Cache cannot throw, even when the entropy source for the hash seed does.
+  add_executable(generation_cache_seed test/seed.cc)
+  target_link_libraries(generation_cache_seed PRIVATE generation_cache Threads::Threads)
+  add_test(NAME generation_cache_seed COMMAND generation_cache_seed)
+
   # Benchmark (not built by default): cmake --build build --target generation_cache_bench
   # The comparator (abseil flat_hash_map) is found only for this target.
   find_package(absl QUIET)

@@ -32,19 +32,54 @@
 // client already has", invalidated whenever the server accepts a new
 // write, is the motivating case.
 
+#include <chrono>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
-#include <cstdint>
 #include <optional>
 #include <random>
 #include <shared_mutex>
+#include <thread>
 #include <type_traits>
 #include <vector>
 #include <utility>
 
+// The entropy source for the per-process hash seed: a class with a default constructor and an
+// `unsigned operator()()`. A build can name another type, which is how the tests make it throw.
+#ifndef GENERATION_CACHE_ENTROPY
+#define GENERATION_CACHE_ENTROPY std::random_device
+#endif
+
 namespace generation_cache {
 
 namespace detail {
+	inline std::uint64_t splitmix64(std::uint64_t x) noexcept {
+		x += 0x9E3779B97F4A7C15ULL;
+		x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+		x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+		return x ^ (x >> 31);
+	}
+
+	// The seed every table of the process starts from, drawn once on first use. It mixes the
+	// operating system's entropy with the clock, the thread and an address, so a failing
+	// entropy source costs quality, never an exception: constructing a Cache cannot throw.
+	inline std::uint64_t process_seed() noexcept {
+		static const std::uint64_t seed = []() noexcept {
+			std::uint64_t os = 0;
+			try {
+				GENERATION_CACHE_ENTROPY device;
+				os = (std::uint64_t(device()) << 32) ^ device();
+			} catch (...) {
+			}
+			static const char anchor = 0;
+			const auto now = static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+			const auto tid = static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+			return splitmix64(os ^ splitmix64(now) ^ splitmix64(tid ^ reinterpret_cast<std::uintptr_t>(&anchor)));
+		}();
+		return seed;
+	}
+
 	// A Key is "hashable" when std::hash<Key> is enabled and operator== exists.
 	template <typename Key, typename = void>
 	struct is_hashable : std::false_type {};
@@ -69,10 +104,9 @@ namespace detail {
 		unsigned shift_ = 64;
 		unsigned bits_ = 0;
 
-		// Per-table random seed folded into the hash before mixing, so the
-		// probe sequence is not a fixed function of std::hash and a key set
-		// cannot be crafted offline to collide in every cache.
-		std::uint64_t seed_ = (std::uint64_t(std::random_device{}()) << 32) ^ std::random_device{}();
+		// Per-table seed folded into the hash before mixing, so the table index of a key is not
+		// a fixed function of std::hash: the process seed varied by the table's address.
+		std::uint64_t seed_ = splitmix64(process_seed() ^ reinterpret_cast<std::uintptr_t>(this));
 
 		std::uint64_t mix(const Key& k) const {
 			std::uint64_t h = static_cast<std::uint64_t>(std::hash<Key>{}(k)) ^ seed_;
