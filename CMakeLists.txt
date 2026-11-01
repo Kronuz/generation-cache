@@ -52,13 +52,20 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(generation_cache_first_insert PRIVATE generation_cache)
   add_test(NAME generation_cache_first_insert COMMAND generation_cache_first_insert)
 
-  # Benchmark (not built by default): cmake --build build --target generation_cache_bench
-  # The comparator (abseil flat_hash_map) is found only for this target.
-  find_package(absl QUIET)
-  if(absl_FOUND)
-    add_executable(generation_cache_bench EXCLUDE_FROM_ALL bench/bench.cc)
-    target_link_libraries(generation_cache_bench PRIVATE generation_cache Threads::Threads absl::flat_hash_map)
+  # Benchmark (off by default): Cache against the original std::map + std::mutex cache and, when
+  # abseil is found, against absl::flat_hash_map behind a mutex and a shared_mutex. The comparator
+  # is used only by this target.
+  #   cmake -B build -DGENERATION_CACHE_BUILD_BENCH=ON && cmake --build build --target generation_cache_bench
+  option(GENERATION_CACHE_BUILD_BENCH "Build bench/bench.cc" OFF)
+  if(GENERATION_CACHE_BUILD_BENCH)
+    add_executable(generation_cache_bench bench/bench.cc)
+    target_link_libraries(generation_cache_bench PRIVATE generation_cache Threads::Threads)
     target_compile_options(generation_cache_bench PRIVATE -O3 -DNDEBUG)
+    find_package(absl QUIET)
+    if(absl_FOUND)
+      target_compile_definitions(generation_cache_bench PRIVATE HAVE_ABSL=1)
+      target_link_libraries(generation_cache_bench PRIVATE absl::flat_hash_map)
+    endif()
   endif()
 
   # A runnable tour of the library (not a test): build & run

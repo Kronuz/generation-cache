@@ -1,5 +1,5 @@
 // Benchmark: generation_cache::Cache against the original (std::map + std::mutex)
-// and against abseil flat_hash_map behind a mutex / shared_mutex (comparators).
+// and, when abseil is found (HAVE_ABSL), against absl::flat_hash_map behind a mutex / shared_mutex.
 // get() hit with string keys, 1 thread and 4 threads, at three sizes; then the costs of
 // a small cache: construct + destroy, and get hit and miss with 64 int keys. ns per op, best of 5.
 #include <algorithm>
@@ -14,7 +14,9 @@
 #include <type_traits>
 #include <vector>
 
+#ifdef HAVE_ABSL
 #include <absl/container/flat_hash_map.h>
+#endif
 
 #include "generation_cache.hh"
 
@@ -48,6 +50,7 @@ public:
 	std::size_t size() const { std::lock_guard<std::mutex> l(m_); return e_.size(); }
 };
 
+#ifdef HAVE_ABSL
 template <class M, class K, class V>
 class AbslCache {
 	mutable M m_;
@@ -77,6 +80,8 @@ public:
 		}
 	}
 };
+
+#endif
 
 template <class K, class V>
 struct NewCache {
@@ -145,14 +150,18 @@ int main(int argc, char** argv) {
 		for (size_t i = 0; i < n; ++i) keys[i] = "/api/v1/resource/" + std::to_string(i) + "?etag=abc";
 		row<OldCache<Str, Str>>("old std::map+mutex", n, keys);
 		row<NewCache<Str, Str>>("Cache (this library)", n, keys);
+#ifdef HAVE_ABSL
 		row<AbslCache<std::mutex, Str, Str>>("mutex+absl flat_hash_map", n, keys);
 		row<AbslCache<std::shared_mutex, Str, Str>>("shared_mutex+absl", n, keys);
+#endif
 	}
 	if (!small) return 0;
 	std::printf("small cache, int keys, 1 thread\n");
 	small_row<OldCache<int, int>>("old std::map+mutex");
 	small_row<NewCache<int, int>>("Cache (this library)");
+#ifdef HAVE_ABSL
 	small_row<AbslCache<std::mutex, int, int>>("mutex+absl flat_hash_map");
 	small_row<AbslCache<std::shared_mutex, int, int>>("shared_mutex+absl");
+#endif
 	return 0;
 }

@@ -27,9 +27,11 @@ test/first_insert.cc    The table allocates nothing until the first insert, then
 test/seed.cc           Constructing a Cache cannot throw when the entropy source
                        does (GENERATION_CACHE_ENTROPY); CTest test
                        `generation_cache_seed`.
-bench/bench.cc         Benchmark against std::mutex / std::shared_mutex plus
-                       absl::flat_hash_map, with small-cache rows; target
-                       `generation_cache_bench`, built only when abseil is found.
+bench/bench.cc         Benchmark against the original std::map + std::mutex cache and,
+                       when abseil is found, absl::flat_hash_map behind a mutex and
+                       a shared_mutex, with small-cache rows; target
+                       `generation_cache_bench`, built with
+                       GENERATION_CACHE_BUILD_BENCH=ON.
 examples/demo.cc       A runnable tour (not a test): a warm cache, a source
                        change, a recompute.
 CMakeLists.txt         Header-only INTERFACE target `generation_cache`
@@ -81,7 +83,7 @@ ASLR) rather than chasing it as a code issue.
 None beyond the standard library (ARCHITECTURE.md lists the headers). C++17
 is the floor (`std::optional`, `std::shared_lock`); nothing here needs C++20.
 No FetchContent and no third-party library in the library target; the
-benchmark alone uses abseil.
+benchmark alone uses abseil, found with `find_package` and optional.
 
 ## Conventions
 

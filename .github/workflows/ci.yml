@@ -14,3 +14,5 @@ concurrency:
 jobs:
   ci:
     uses: Kronuz/cpp-libraries/.github/workflows/cmake.yml@main
+    with:
+      cmake_args: -DGENERATION_CACHE_BUILD_BENCH=ON  # builds the benchmark, which no test runs

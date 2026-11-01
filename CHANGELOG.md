@@ -4,6 +4,14 @@ All notable changes to `generation-cache`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the library has no
 releases, so entries are dated.
 
+## 2026-11-01
+
+### Changed
+
+- `generation_cache_bench` builds only with `-DGENERATION_CACHE_BUILD_BENCH=ON`. Abseil is
+  optional there: without it the benchmark times the library against the original
+  `std::map` + `std::mutex` cache alone (it was not built at all without abseil).
+
 ## 2026-10-31
 
 ### Fixed

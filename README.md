@@ -180,12 +180,13 @@ Intel i9-9980HK (x86_64, Apple clang 17):
 | 64 `int` keys: get hit | 19.1 | 10.6 | 17.1 | 36.7 |
 | 64 `int` keys: get miss | 20.9 | 10.7 | 17.3 | 36.4 |
 
-The benchmark needs abseil installed. Arguments select the rows: sizes run only those
-string rows, and `small` adds the small-cache rows (no arguments runs 64, 4096 and
-100000, then the small-cache rows):
+The `absl` columns appear when abseil is installed (`find_package(absl)`, used only by the
+benchmark). Arguments select the rows: sizes run only those string rows, and `small` adds the
+small-cache rows (no arguments runs 64, 4096 and 100000, then the small-cache rows):
 
 ```sh
-cmake -B build && cmake --build build --target generation_cache_bench
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGENERATION_CACHE_BUILD_BENCH=ON
+cmake --build build --target generation_cache_bench
 ./build/generation_cache_bench [n ...] [small]
 ```
 
