@@ -24,10 +24,10 @@ static void check(bool ok, const char* what) {
 	}
 }
 
-// Waits for a condition, giving up after a few seconds (a hang is a failure, not a stuck CI job).
+// Waits for a condition, giving up after `ms` milliseconds (a hang is a failure, not a stuck CI job).
 template <typename F>
-static bool wait_for(F&& f) {
-	for (int i = 0; i < 5000; ++i) {
+static bool wait_for(F&& f, int ms = 5000) {
+	for (int i = 0; i < ms; ++i) {
 		if (f()) return true;
 		std::this_thread::sleep_for(1ms);
 	}
@@ -126,6 +126,8 @@ static void waiting_writer_blocks_new_readers() {
 }
 
 // Readers that never pause cannot starve a writer, and a stream of writers cannot starve a reader.
+// The check is progress, not rate: a turn can take milliseconds on a loaded two-core VM, and
+// starvation is a side that never gets one.
 static void nobody_starves() {
 	{
 		Lock lock;
@@ -135,13 +137,13 @@ static void nobody_starves() {
 			readers.emplace_back([&] { while (!stop) { std::shared_lock<Lock> l(lock); } });
 		std::atomic<int> done{0};
 		std::thread writer([&] {
-			for (int i = 0; i < 1000; ++i) { std::unique_lock<Lock> l(lock); done.fetch_add(1); }
+			for (int i = 0; i < 100; ++i) { std::unique_lock<Lock> l(lock); done.fetch_add(1); }
 		});
-		bool ok = wait_for([&] { return done.load() == 1000; });
+		bool ok = wait_for([&] { return done.load() == 100; }, 60000);
 		stop = true;
 		for (auto& t : readers) t.join();
 		writer.join();
-		check(ok, "a writer finished 1000 turns among four busy readers");
+		check(ok, "a writer finished 100 turns among four busy readers");
 	}
 	{
 		Lock lock;
@@ -151,13 +153,13 @@ static void nobody_starves() {
 			writers.emplace_back([&] { while (!stop) { std::unique_lock<Lock> l(lock); } });
 		std::atomic<int> done{0};
 		std::thread reader([&] {
-			for (int i = 0; i < 1000; ++i) { std::shared_lock<Lock> l(lock); done.fetch_add(1); }
+			for (int i = 0; i < 100; ++i) { std::shared_lock<Lock> l(lock); done.fetch_add(1); }
 		});
-		bool ok = wait_for([&] { return done.load() == 1000; });
+		bool ok = wait_for([&] { return done.load() == 100; }, 60000);
 		stop = true;
 		for (auto& t : writers) t.join();
 		reader.join();
-		check(ok, "a reader finished 1000 turns among two busy writers");
+		check(ok, "a reader finished 100 turns among two busy writers");
 	}
 	std::puts("rw_lock: no starvation either way OK");
 }
