@@ -98,21 +98,23 @@ Not for:
 
 ## ⚡ Performance
 
-ns per `get` hit, best of 5, mean of two passes, `-O3 -DNDEBUG`. String keys of
-about 30 bytes; the small cache holds 64 `int` keys on 1 thread. The comparators
-are a `std::map` behind a `std::mutex` and `absl::flat_hash_map` behind a
-`std::shared_mutex` (abseil version not recorded with these runs).
+ns per `get` hit, best of 5, mean of two passes, then the mean of two runs, `-O3 -DNDEBUG`.
+String keys of about 30 bytes; the small cache holds 64 `int` keys on 1 thread. The
+comparators are a `std::map` behind a `std::mutex` and `absl::flat_hash_map` from abseil
+20260817 behind a `std::mutex` and behind a `std::shared_mutex`.
 
-| row | `std::map` + `std::mutex` | `Cache` | `absl` + `std::shared_mutex` |
-|---|---:|---:|---:|
-| Apple M4 Pro, 100000 keys, 1 thread | 723 | 147 | 194 |
-| Apple M4 Pro, 100000 keys, 4 threads | 2569 | 84.4 | 293 |
-| Apple M4 Pro, 64 `int` keys | 7.9 | 3.5 | 10.2 |
-| Intel Core i9-9980HK, 100000 keys, 1 thread | 1098 | 440 | 445 |
-| Intel Core i9-9980HK, 100000 keys, 4 threads | 2713 | 134 | 574 |
-| Intel Core i9-9980HK, 64 `int` keys | 19.1 | 10.6 | 36.7 |
+| row | `std::map` + `std::mutex` | `Cache` | `absl` + `std::mutex` | `absl` + `std::shared_mutex` |
+|---|---:|---:|---:|---:|
+| Apple M4 Pro, 100000 keys, 1 thread | 536 | 109 | 88.6 | 132 |
+| Apple M4 Pro, 100000 keys, 4 threads | 2039 | 61.6 | 459 | 277 |
+| Apple M4 Pro, 64 `int` keys | 7.9 | 3.5 | 5.4 | 10.2 |
+| Intel Core i9-9980HK, 100000 keys, 1 thread | 1081 | 434 | 398 | 429 |
+| Intel Core i9-9980HK, 100000 keys, 4 threads | 2751 | 119 | 1634 | 640 |
+| Intel Core i9-9980HK, 64 `int` keys | 19.1 | 10.2 | 16.7 | 36.1 |
 
-Both machines use Apple clang 17.
+On one thread `absl` behind a `std::mutex` is faster than `Cache` at 100000 keys; `Cache`
+wins at four threads, where readers share the lock, and on the small cache. Both machines use
+Apple clang 17.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGENERATION_CACHE_BUILD_BENCH=ON
@@ -120,8 +122,7 @@ cmake --build build --target generation_cache_bench
 ./build/generation_cache_bench
 ```
 
-[docs/perf/](docs/perf/README.md) has every row, the `absl` + `std::mutex`
-column, and the bench's arguments.
+[docs/perf/](docs/perf/README.md) has every row and the bench's arguments.
 
 ## 📚 Documentation
 
