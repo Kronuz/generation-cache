@@ -18,7 +18,7 @@ static void check(const char* name, MakeKey key) {
 		t.insert_or_assign(key(n), key(n));
 		const std::size_t c = t.capacity();
 		assert((c & (c - 1)) == 0);          // a power of two
-		assert(t.size() * 2 <= c);           // load at most 0.5
+		assert(t.size() <= c - std::max<std::size_t>(1, c / 8));  // load at most 7/8, and a slot is always empty
 		assert(c <= std::max<std::size_t>(4, 4 * t.size()));  // and never more than doubled too early
 	}
 	for (int n = 1; n <= 5000; ++n) assert(t.find(key(n)) && *t.find(key(n)) == key(n));

@@ -23,7 +23,21 @@ test/lock.cc           The reader-writer lock: readers share, a writer is
                        nobody starves; CTest test `generation_cache_lock`, the
                        program to run under TSan.
 test/first_insert.cc    The table allocates nothing until the first insert, then 4
-                       slots, and doubles; CTest test `generation_cache_first_insert`.
+                       slots, and doubles when full (at most 7/8 of the slots, and
+                       never the last one); CTest test `generation_cache_first_insert`.
+test/group.cc          `group::equal` against a byte loop for every byte value at
+                       every position, with the empty and padding bytes; CTest test
+                       `generation_cache_group`.
+test/model.cc          The cache and the table against a std::unordered_map model plus
+                       the generation rule over long random operation sequences, with
+                       colliding and poorly mixed hashes, growth from nothing, the load
+                       rule and probe lengths; CTest test `generation_cache_model`.
+                       The group, model, exception_safety, first_insert and
+                       differential tests are built twice, the second time with
+                       GENERATION_CACHE_NO_SIMD (the portable 64-bit group), as
+                       `generation_cache_<name>_nosimd`.
+tools/mutants.py       Breaks the header in 29 ways and requires the tests to fail on
+                       each (`python3 tools/mutants.py -j 2 [CXX]`).
 test/seed.cc           Constructing a Cache cannot throw when the entropy source
                        does (GENERATION_CACHE_ENTROPY); CTest test
                        `generation_cache_seed`.
@@ -31,7 +45,8 @@ bench/bench.cc         Benchmark against a std::map + std::mutex cache and,
                        when abseil is found, absl::flat_hash_map behind a mutex and
                        a shared_mutex, with small-cache rows; it first checks that
                        every comparator returns Cache's results (`check` runs only
-                       that; CTest test `generation_cache_bench_check`). Target
+                       that; CTest test `generation_cache_bench_check`; `nomap` leaves
+                       out the slow std::map rows). Target
                        `generation_cache_bench`, built with
                        GENERATION_CACHE_BUILD_BENCH=ON.
 examples/demo.cc       A runnable tour (not a test): a warm cache, a source
@@ -122,10 +137,24 @@ benchmark alone uses abseil, found with `find_package` and optional.
   would need every read path to also re-check staleness per-entry, which
   this design deliberately avoids by making `clear()` a hard cutover.
 - **`grow()` builds the whole new table before it touches the old one.**
-  Never mutate `slots_`, `shift_` or `bits_` before every entry is placed,
-  and never move entries unless both `Key` and `Value` are nothrow-move
-  (copy otherwise). A throw mid-rehash must leave the cache as it was;
-  `test/exception_safety.cc` fails if it does not.
+  Never change `ctrl_`, `slots_`, `group_mask_`, `capacity_` or `room_` before every
+  entry is placed, and never move entries unless both `Key` and `Value` are
+  nothrow-move (copy otherwise). A throw mid-rehash must leave the cache as it
+  was; `test/exception_safety.cc` fails if it does not.
+- **The table always has an empty slot, and slots never empty.** A lookup
+  stops at the first group with an empty slot, because an entry is placed in the
+  first group of its probe sequence that has room and nothing erases one entry.
+  `max_size()` keeps at least one slot empty (`capacity - max(1, capacity / 8)`),
+  so a probe ends. Single-entry erase would need tombstones in the control
+  bytes; do not add it without them. The control bytes are `ctrl_empty`
+  (`0x80`), a tag (`0` to `0x7F`), or `ctrl_padding` (`0xFF`, past the last slot of
+  a table smaller than a group): the padding must stay neither a tag nor empty.
+- **A group test reads `width` control bytes at once.** Every table has at
+  least `width` control bytes (`ctrl_bytes()`), and its groups are aligned
+  multiples of `width`. `test/group.cc` checks `group::equal` on every byte
+  value; run it in both builds (SIMD and `GENERATION_CACHE_NO_SIMD`).
+- **`std::hash` is called again for every key on a growth** (nothing stores the
+  hash), so a `grow()` that moves entries relies on `std::hash` not throwing.
 - **Don't add an eviction policy (LRU/TTL/LFU/size cap) to this class.**
   That's a different, already-solved problem --
   [`lru-cache`](https://github.com/Kronuz/lru-cache) -- with a

@@ -25,8 +25,9 @@ it when one write invalidates everything at once.
 - **Strong exception guarantee.** If a `Key` copy, a `Value` move or copy, an
   allocation, or a rehash throws, `try_insert` leaves the cache unchanged
   (basic guarantee for move-only types whose move can throw).
-- **A small open-addressing table.** Hashable keys live in a seeded
-  linear-probing table that allocates 4 slots on the first insert; keys with
+- **A compact open-addressing table.** Hashable keys live in a seeded table
+  that tests 16 slots (8 without SSE2 or NEON) per control-byte comparison, holds
+  up to 7/8 of its slots, and allocates 4 slots on the first insert; keys with
   only `operator<` use `std::map`.
 - **Construction never throws**, even when the seed's entropy source does.
 

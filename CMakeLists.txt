@@ -52,6 +52,25 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(generation_cache_first_insert PRIVATE generation_cache)
   add_test(NAME generation_cache_first_insert COMMAND generation_cache_first_insert)
 
+  # The control-byte group test (SSE2, NEON or the 64-bit word, whichever the platform selects).
+  add_executable(generation_cache_group test/group.cc)
+  target_link_libraries(generation_cache_group PRIVATE generation_cache)
+  add_test(NAME generation_cache_group COMMAND generation_cache_group)
+
+  # The cache and the table against a std::unordered_map model: long random operation sequences,
+  # colliding and poorly mixed hashes, growth from nothing, the load rule, probe lengths.
+  add_executable(generation_cache_model test/model.cc)
+  target_link_libraries(generation_cache_model PRIVATE generation_cache)
+  add_test(NAME generation_cache_model COMMAND generation_cache_model)
+
+  # The same tests with the portable 64-bit group, which the SIMD groups replace on x86-64 and arm64.
+  foreach(nosimd_test group model exception_safety first_insert differential)
+    add_executable(generation_cache_${nosimd_test}_nosimd test/${nosimd_test}.cc)
+    target_link_libraries(generation_cache_${nosimd_test}_nosimd PRIVATE generation_cache Threads::Threads)
+    target_compile_definitions(generation_cache_${nosimd_test}_nosimd PRIVATE GENERATION_CACHE_NO_SIMD=1)
+    add_test(NAME generation_cache_${nosimd_test}_nosimd COMMAND generation_cache_${nosimd_test}_nosimd)
+  endforeach()
+
   # Benchmark (off by default): Cache against a std::map behind a std::mutex and, when abseil is
   # found, against absl::flat_hash_map behind a mutex and a shared_mutex. The comparators are used
   # only by this target. `generation_cache_bench check` verifies, with no timing, that each one

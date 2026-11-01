@@ -80,13 +80,16 @@ assignment cannot throw. Constructing a `Cache` never throws.
 ## Storage and hashing
 
 Entries have no exposed order. When `Key` has a `std::hash` and `operator==`,
-they live in a small open-addressing table: linear probing, load <= 0.5, the
-64-bit hash stored per slot, and 4 slots allocated by the first insert. The hash
-is mixed with a seed drawn once per process (from `std::random_device`, mixed
+they live in an open-addressing table that probes a group of 16 slots (8 without
+SSE2 or NEON) with one control-byte comparison: one byte per slot holds a 7-bit
+tag of the key's hash, the table holds up to 7/8 of its slots (never the last
+one), and the first insert allocates 4 slots. The hash is mixed with a seed drawn
+once per process (from `std::random_device`, mixed
 with the clock, the thread id and an address, so an entropy source that fails
 costs quality and never an exception) and varied per table, so the index of a
 key is not a function of `std::hash` alone. The seed spreads the indexes of keys
 whose `std::hash` values differ. Keys with equal `std::hash` values collide in
 every cache, and the standard library's string hashes are unseeded, so a caller
-that must withstand crafted keys needs its own `std::hash`. A `Key` with only
+that must withstand crafted keys needs its own `std::hash`. A growth calls
+`std::hash` again for every key, and a `std::hash` must not throw. A `Key` with only
 `operator<` uses `std::map`.

@@ -12,10 +12,11 @@ A single header, nothing else:
 ```
 
 No compiled translation unit, no external dependency. `generation_cache.hh`
-includes only standard headers: `<atomic>`, `<chrono>`, `<cstdint>`,
-`<functional>`, `<map>`, `<mutex>`, `<optional>`, `<random>`, `<shared_mutex>`
-(for `std::shared_lock`), `<thread>`, `<type_traits>`, `<vector>`, and
-`<utility>`.
+includes only standard headers: `<atomic>`, `<cassert>`, `<chrono>`, `<cstddef>`,
+`<cstdint>`, `<cstring>`, `<functional>`, `<map>`, `<mutex>`, `<new>`,
+`<optional>`, `<random>`, `<shared_mutex>` (for `std::shared_lock`), `<thread>`,
+`<type_traits>`, and `<utility>`, plus `<emmintrin.h>` (SSE2) or `<arm_neon.h>`
+(NEON) where the platform has them.
 
 ## The problem this solves
 
@@ -97,29 +98,59 @@ spends one atomic operation to enter and one to leave.
 ## Container choice
 
 No iteration order is exposed, so the container is free. A hashable `Key`
-(`std::hash` plus `==`) uses `detail::hash_entries`: insert/replace/find/clear
-only (no single-entry erase, hence no tombstones), linear probing, load <= 0.5,
-the first insert allocating 4 slots and each growth doubling,
-the mixed 64-bit hash kept in each slot so most probes never touch the key. Any
-other `Key` uses `detail::ordered_entries`, a thin `std::map` adapter. The
-table mixes a seed into `std::hash` before probing: one value drawn per process
-on first use (`detail::process_seed`: `std::random_device`, the clock, the
-thread id and an address, mixed; a failing entropy source costs quality, not an
-exception, so constructing a `Cache` never throws), varied by the table's
-address. The seed moves the table index of keys with different `std::hash`
-values. It cannot separate keys whose `std::hash` values are equal, so it
-does not defend against a hash function whose collisions can be computed.
-`insert_or_assign`
-constructs the entry before it publishes the slot's hash and bumps the size, so
-a throwing `Key` copy leaves the table unchanged. `grow()` builds the next table
-in a local vector (new shift included) and swaps it in only after every entry is
-placed, so a throw while allocating or moving leaves the old table untouched. It
-moves entries when `Key` and `Value` are both nothrow-move-constructible and
-copies them otherwise (the decision is per pair, never per member, so a failed
-copy never follows a moved-from key); a move-only type whose move can throw has
-no safe choice and gets the basic guarantee, as `std::vector` does.
-`ordered_entries` uses `std::map::insert_or_assign`, which builds a new node
-from the value before linking it.
+(`std::hash` plus `==`) uses `detail::hash_entries`; any other `Key` uses
+`detail::ordered_entries`, a thin `std::map` adapter whose `insert_or_assign`
+builds a new node from the value before linking it.
+
+`hash_entries` is an open-addressing table that inserts, replaces, finds and
+clears, and never erases one entry, so a slot goes from empty to full and never
+back and there are no tombstones. One allocation holds a control byte for each
+slot and then the slots, each only a `Key` and a `Value`: no stored hash, no
+flag. The capacity is a power of two, the first insert allocates 4 slots and
+each growth doubles, and the table holds at most `capacity - max(1, capacity / 8)`
+entries: 7/8 of a large table, and an empty slot in every table.
+
+The slots form groups of 16 (SSE2 or NEON) or 8 (a 64-bit word, the portable
+fallback and `GENERATION_CACHE_NO_SIMD`); a table smaller than a group is one
+group whose spare control bytes hold a value that is neither a tag nor empty.
+A key's mixed hash picks its first group by its low bits and a 7-bit tag by its
+top bits. A lookup compares the tag with the whole group's control bytes in one
+operation, compares the keys of the slots that match (a wrong tag costs a
+compare in about 1 in 20 lookups at 100000 keys), and stops at the first group
+that has an empty slot. That is enough because an entry is placed in the first
+group of its probe sequence that has room, and a slot never empties, so nothing
+lies past a group with room. The probe sequence over groups is triangular, which
+reaches every group of a power-of-two table, and the load bound keeps a group
+with room in the table. A table of 100000 string entries is 131072 slots, 76%
+full, and a lookup examines 1.03 groups on average.
+
+The control bytes are the hot part: 1 byte per slot, so 128 KB for the 131072
+slots of a 100000-entry table. A lookup reads one group of them, then one slot
+(and the key and value storage behind it) however full the table is, instead of
+a slot per probe step.
+
+The hash is `std::hash` xor a per-table seed, then a folded 128-bit
+multiplication (the high and low halves of the product, xored; `splitmix64`
+where the compiler has no 128-bit type). The seed is one value drawn per
+process on first use (`detail::process_seed`: `std::random_device`, the clock,
+the thread id and an address, mixed; a failing entropy source costs quality, not
+an exception, so constructing a `Cache` never throws), varied by the table's
+address. It moves the group of keys with different `std::hash` values. It cannot
+separate keys whose `std::hash` values are equal, so it does not defend against
+a hash function whose collisions can be computed. A growth hashes every key
+again, which is why `std::hash` must not throw (a hash requirement).
+
+`insert_or_assign` constructs the entry before it publishes the slot's control
+byte and bumps the size, so a throwing `Key` copy leaves the table unchanged. An
+overwrite never grows the table. `grow()` allocates the next table beside the
+old one and swaps it in only after every entry is placed, so a throw while
+allocating or moving leaves the old table untouched. It moves entries when `Key`
+and `Value` are both nothrow-move-constructible and copies them otherwise (the
+decision is per pair, never per member, so a failed copy never follows a
+moved-from key); a move-only type whose move can throw has no safe choice and
+gets the basic guarantee, as `std::vector` does. `clear()` destroys the entries,
+frees the allocation, and returns to the empty table, so the next insert
+allocates 4 slots again.
 
 ## Why no built-in size bound
 

@@ -10,9 +10,10 @@
 // Failures are injected by element types whose copy/move throws on the Nth
 // operation after arming, and by a replaced global operator new that throws
 // std::bad_alloc on the Nth allocation after arming. N is swept across every
-// operation of an insert sequence that crosses several rehashes (16 -> 32 ->
-// 64 -> 128 slots), so each element move/copy and the table allocation of
-// each rehash is the failing one in turn.
+// operation of an insert sequence that crosses several rehashes (4 -> 8 -> 16
+// -> 32 -> 64 -> 128 slots, at the 4th, 8th, 15th, 29th and 57th entry), so each
+// element move/copy and the table allocation of each rehash is the failing one
+// in turn.
 #undef NDEBUG
 #include "../generation_cache.hh"
 
@@ -40,6 +41,8 @@
 #if !defined(GC_SANITIZED) || defined(GC_FORCE_ALLOC_INJECTION)
 #  define GC_ALLOC_INJECTION 1
 #endif
+
+static constexpr int kInserts = 60;  // keys inserted per run: the table grows to 128 slots
 
 static long g_alloc = -1;  // armed: throw bad_alloc when it counts down to 0
 #ifdef GC_ALLOC_INJECTION
@@ -127,7 +130,7 @@ template <typename K, typename C>
 static void check(const C& c, const std::map<int, int>& model, const char* name, long n, const char* step) {
 	disarm();
 	EXPECT(c.size() == model.size(), "%s N=%ld %s: size %zu, model %zu", name, n, step, c.size(), model.size());
-	for (int k = 1; k <= 45; ++k) {
+	for (int k = 1; k <= kInserts + 5; ++k) {
 		auto got = c.get(make<K>(k));
 		auto it = model.find(k);
 		if (it == model.end()) EXPECT(!got.has_value(), "%s N=%ld %s: key %d present but not inserted", name, n, step, k);
@@ -169,7 +172,7 @@ static int run(const char* name, Inject mode, long maxN, bool replace) {
 				}
 				EXPECT(false, "%s N=%ld: retry of key %d failed", name, N, key);
 			};
-			for (int i = 1; i <= 40; ++i) {
+			for (int i = 1; i <= kInserts; ++i) {
 				if (replace && i > 1) attempt(i - 1, 1000 + i);
 				attempt(i, i * 10);
 				check<K>(c, model, name, N, "after insert");
@@ -204,15 +207,16 @@ static void moves_always_throw() {
 }
 
 // A Key and Value with a nothrow move must rehash by moving: the only copy
-// during the 9th insert (which rehashes 16 -> 32 slots) is the insert's own key
-// copy, so a throwing copy can never fail a rehash.
+// during the 8th insert (which rehashes 8 -> 16 slots, the table being full at
+// 7 entries) is the insert's own key copy, so a throwing copy can never fail a
+// rehash.
 static void nothrow_move_never_copies_on_rehash() {
 	generation_cache::Cache<SafeKey, SafeVal> c;
-	for (int i = 1; i <= 8; ++i) EXPECT(c.try_insert(SafeKey(i), SafeVal(i), c.generation()), "insert %d", i);
-	SafeKey k(9);
-	SafeVal v(9);
+	for (int i = 1; i <= 7; ++i) EXPECT(c.try_insert(SafeKey(i), SafeVal(i), c.generation()), "insert %d", i);
+	SafeKey k(8);
+	SafeVal v(8);
 	g_copies = 0;
-	EXPECT(c.try_insert(k, std::move(v), c.generation()), "insert 9");
+	EXPECT(c.try_insert(k, std::move(v), c.generation()), "insert 8");
 	EXPECT(g_copies == 1, "rehash of nothrow-move elements made %ld copies (want 1, the insert's own key)", g_copies);
 }
 
@@ -249,14 +253,14 @@ int main() {
 
 	int injected = 0;
 	// Element copy/move throws on the Nth operation (N past ~140 never fires).
-	injected += run<ThrowKey, int>("hash, Key copy/move throws", Inject::ops, 150, true);
-	injected += run<int, ThrowVal>("hash, Value copy/move throws", Inject::ops, 150, false);
-	injected += run<ThrowKey, ThrowVal>("hash, Key and Value throw", Inject::ops, 300, false);
-	injected += run<SafeKey, SafeVal>("hash, nothrow move, throwing copy", Inject::ops, 150, true);
+	injected += run<ThrowKey, int>("hash, Key copy/move throws", Inject::ops, 300, true);
+	injected += run<int, ThrowVal>("hash, Value copy/move throws", Inject::ops, 300, false);
+	injected += run<ThrowKey, ThrowVal>("hash, Key and Value throw", Inject::ops, 500, false);
+	injected += run<SafeKey, SafeVal>("hash, nothrow move, throwing copy", Inject::ops, 300, true);
 #ifdef GC_ALLOC_INJECTION
 	// operator new throws bad_alloc on the Nth allocation.
-	injected += run<ThrowKey, int>("hash, bad_alloc (Key)", Inject::allocs, 4, true);
-	injected += run<std::string, std::string>("hash, bad_alloc (strings)", Inject::allocs, 6, true);
+	injected += run<ThrowKey, int>("hash, bad_alloc (Key)", Inject::allocs, 8, true);
+	injected += run<std::string, std::string>("hash, bad_alloc (strings)", Inject::allocs, 80, true);
 #endif
 	// The std::map adapter, for a Key with only operator<.
 	injected += run<OrderedKey, ThrowVal>("ordered, Value copy/move throws", Inject::ops, 10, false);
