@@ -3,241 +3,160 @@
 Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a collection of small, reusable C++ libraries.
 
 [![CI](https://github.com/Kronuz/generation-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/generation-cache/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
+![Header-only](https://img.shields.io/badge/header--only-yes-green.svg)
 
+Header-only thread-safe cache for C++17 that clears as a whole and drops values computed before the last clear().
+Many readers derive a `Value` from a `Key` against one source of truth that
+changes in discrete steps, so every cached value turns wrong at the same moment.
+`clear()` advances a generation counter, and `try_insert` refuses a value read
+at an older generation, so a slow reader cannot put stale data back. Reach for
+it when one write invalidates everything at once.
 
-A small, header-only, thread-safe **cache invalidated as a whole group**, for
-C++17 and later.
+## ✨ Highlights
 
-## What it is
+- **Whole-cache invalidation.** `clear()` drops every entry and advances the
+  generation in one step.
+- **No stale inserts.** `try_insert(key, value, generation)` commits only when
+  the generation still matches, and returns whether it did.
+- **Parallel readers.** One reader-writer lock: a reader enters with one atomic
+  add, and a waiting writer holds new readers back, so neither side starves.
+- **Strong exception guarantee.** If a `Key` copy, a `Value` move or copy, an
+  allocation, or a rehash throws, `try_insert` leaves the cache unchanged
+  (basic guarantee for move-only types whose move can throw).
+- **A small open-addressing table.** Hashable keys live in a seeded
+  linear-probing table that allocates 4 slots on the first insert; keys with
+  only `operator<` use `std::map`.
+- **Construction never throws**, even when the seed's entropy source does.
 
-Most caches evict by recency (LRU) or age (TTL); see
-[`lru-cache`](https://github.com/Kronuz/lru-cache) for that shape. This one is
-for a different, common case: many readers derive a `Value` from some `Key`
-against a single shared, mutable source of truth. That source changes as a
-discrete sequence of events (a write, a new version, an accepted update), not
-continuously. Every cached `Value` is valid between two consecutive events and
-invalid the instant the next one lands. There is no "older but still useful"
-state, so there is nothing for LRU or TTL to rank.
+## 🚀 Quick start
 
-`generation_cache::Cache<Key, Value>` models exactly that: a `clear()` call
-invalidates every entry at once and advances an internal generation counter.
-A result computed from the OLD state, but not yet inserted when `clear()`
-runs, is detected and silently dropped instead of resurrecting stale data.
-Closing that race is what the generation counter is for.
+```cpp
+#include "generation_cache.hh"
 
-## Install
+#include <cstdio>
+#include <string>
 
-Header-only: `generation_cache.hh` is the whole library. Requires C++17 and
-nothing beyond the standard library.
+int main() {
+	generation_cache::Cache<int, std::string> cache;
+	int version = 1;  // the shared source of truth
+	auto compute = [&](int key) { return std::to_string(key) + "@v" + std::to_string(version); };
 
-With CMake `FetchContent`:
+	auto lookup = cache.get_with_generation(7);  // a miss, and the generation it saw
+	cache.try_insert(7, compute(7), lookup.generation);  // commits: nothing changed meanwhile
+	std::printf("%s\n", cache.get(7)->c_str());  // 7@v1
+
+	auto slow = cache.get_with_generation(8);
+	std::string stale = compute(8);  // computed against version 1...
+	++version;
+	cache.clear();  // ...but the source changed before the insert
+	std::printf("%d\n", cache.try_insert(8, stale, slow.generation));  // 0: dropped
+	std::printf("%zu\n", cache.size());  // 0
+}
+```
+
+[`examples/demo.cc`](examples/demo.cc) runs three readers against a warm cache
+through a source change.
+
+## 📦 Installation
+
+Requires a C++17 compiler and CMake 3.14 or newer; no dependencies. CI builds it
+on Linux (x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan, UBSan,
+and TSan builds.
 
 ```cmake
 include(FetchContent)
-FetchContent_Declare(
-  generation_cache
+FetchContent_Declare(generation_cache
   GIT_REPOSITORY https://github.com/Kronuz/generation-cache.git
-  GIT_TAG        main
-)
+  GIT_TAG        189d51b8251219e433aa11a5abe59a77a7efea88)  # or main for the tip
 FetchContent_MakeAvailable(generation_cache)
 
-target_link_libraries(your_target PRIVATE generation_cache::generation_cache)
+target_link_libraries(my_app PRIVATE generation_cache::generation_cache)
 ```
-
-Then:
 
 ```cpp
 #include "generation_cache.hh"
 ```
 
-## Usage
+## 🎯 When to use it
 
-The motivating case: a server composes an expensive `Value` from a `Key`
-against its current state, and that state changes in discrete steps (e.g. one
-per accepted write).
+Use it for values derived from shared state that changes in discrete steps (a
+write, a new version, an accepted update), read by many threads between steps.
 
-```cpp
-#include "generation_cache.hh"
+Not for:
 
-generation_cache::Cache<int, std::string> cache;
+- **Recency or age eviction.** Entries never expire on their own;
+  [lru-cache](https://github.com/Kronuz/lru-cache) evicts by recency.
+- **Unbounded key spaces.** Nothing caps `size()`; a use without a natural
+  bound on distinct keys needs its own cap.
+- **Re-entrant callbacks.** A `Value` copy constructor, `std::hash`, and
+  `operator==` run under the lock and must not call back into the same cache.
+- **Crafted keys with unseeded hashes.** Keys with equal `std::hash` values
+  collide in every cache, and the standard library's string hashes are
+  unseeded; supply your own `std::hash` against adversarial keys.
 
-// A reader: look up, and on a miss, compute and insert.
-auto lookup = cache.get_with_generation(key);
-if (lookup.value) {
-    return *lookup.value; // cache hit, no recompute
-}
-auto value = expensive_compute(key); // reads whatever the current state is
-cache.try_insert(key, value, lookup.generation);
-return value;
+## ⚡ Performance
 
-// The writer, whenever the source state changes:
-cache.clear(); // every cached value was relative to the OLD state
-```
+ns per `get` hit, best of 5, mean of two passes, `-O3 -DNDEBUG`. String keys of
+about 30 bytes; the small cache holds 64 `int` keys on 1 thread. The comparators
+are a `std::map` behind a `std::mutex` and `absl::flat_hash_map` behind a
+`std::shared_mutex` (abseil version not recorded with these runs).
 
-`try_insert` only commits if `lookup.generation` still matches the cache's
-current generation. If a `clear()` happened between the `get_with_generation`
-call and the `try_insert` call (because `expensive_compute` took a while and
-a write landed in the meantime, say), the insert is silently dropped:
-the next reader recomputes against the new state instead of seeing a value
-computed from the old one.
+| row | `std::map` + `std::mutex` | `Cache` | `absl` + `std::shared_mutex` |
+|---|---:|---:|---:|
+| Apple M4 Pro, 100000 keys, 1 thread | 723 | 147 | 194 |
+| Apple M4 Pro, 100000 keys, 4 threads | 2569 | 84.4 | 293 |
+| Apple M4 Pro, 64 `int` keys | 7.9 | 3.5 | 10.2 |
+| Intel Core i9-9980HK, 100000 keys, 1 thread | 1098 | 440 | 445 |
+| Intel Core i9-9980HK, 100000 keys, 4 threads | 2713 | 134 | 574 |
+| Intel Core i9-9980HK, 64 `int` keys | 19.1 | 10.6 | 36.7 |
 
-A reader with nothing to insert on a miss can use the simpler `get`:
-
-```cpp
-if (auto value = cache.get(key)) {
-    return *value;
-}
-```
-
-## API reference
-
-```cpp
-namespace generation_cache {
-
-template <typename Key, typename Value>
-class Cache {
-public:
-    using Generation = std::uint64_t;
-
-    struct Lookup {
-        std::optional<Value> value;
-        Generation generation;
-    };
-
-    Generation generation() const;
-    std::optional<Value> get(const Key& key) const;
-    Lookup get_with_generation(const Key& key) const;
-    bool try_insert(const Key& key, Value value, Generation at_generation);
-    void clear();
-    std::size_t size() const;
-};
-
-} // namespace generation_cache
-```
-
-- **`generation()`**: the current generation, if you want to snapshot it
-  separately from a lookup.
-- **`get(key)`**: a plain lookup; `std::nullopt` on a miss.
-- **`get_with_generation(key)`**: a lookup plus the generation it was read
-  at, for a caller about to recompute on a miss.
-- **`try_insert(key, value, at_generation)`**: commits only if
-  `at_generation` still matches the current generation; returns whether it
-  committed. A stale call never throws and never overwrites a current entry.
-- **`clear()`**: drops every entry and advances the generation.
-- **`size()`**: current entry count.
-
-All methods are thread-safe. One internal reader-writer lock guards the table
-and the generation counter together, so a lookup and a `clear()` can never
-interleave inconsistently. `get`, `get_with_generation`, `generation` and `size`
-take it shared, so readers run in parallel: a reader enters with one atomic add
-and leaves with one subtract, so a lookup in a small cache costs about what the
-lookup itself costs. `try_insert` and `clear` take it exclusively and wait only
-for the readers already inside; a waiting writer holds new readers back, so
-readers that overlap continuously cannot starve it, on every platform. A `Value`
-copy constructor, `std::hash` and `operator==` run under the lock and must not
-call back into the same cache. `try_insert` has the strong exception guarantee:
-if anything throws (a `Key` copy, a `Value` move or copy, an allocation, the
-table's rehash), the cache is unchanged and still usable. The rehash builds the
-new table completely before it replaces the old one, and moves entries only when
-`Key` and `Value` are nothrow-move-constructible, copying them otherwise. A
-move-only type whose move can throw gets the basic guarantee instead, as with
-`std::vector`, and overwriting an existing key assigns `Value`, which is strong
-only if its move assignment cannot throw. Constructing a `Cache` never throws.
-
-Entries have no exposed order. When `Key` has a `std::hash` and `operator==`,
-they live in a small open-addressing table: linear probing, load <= 0.5, the
-64-bit hash stored per slot, and 4 slots allocated by the first insert. The hash is mixed with a seed drawn once per process
-(from `std::random_device`, mixed with the clock, the thread id and an address,
-so an entropy source that fails costs quality and never an exception) and varied
-per table, so the index of a key is not a function of `std::hash` alone. The seed
-spreads the indexes of keys whose `std::hash` values differ. Keys with equal
-`std::hash` values collide in every cache, and the standard library's string
-hashes are unseeded, so a caller that must withstand crafted keys needs its own
-`std::hash`. A `Key` with only `operator<` uses `std::map`.
-
-## Performance
-
-String keys of about 30 bytes, `get` hit, ns per op (best of 5, mean of two passes), on
-1 thread and on 4 threads; the comparators are `std::map` behind a `std::mutex` and
-`absl::flat_hash_map` behind a `std::mutex` or a `std::shared_mutex`. A small cache
-holds 64 `int` keys on 1 thread. Apple M4 Pro (arm64, Apple clang 17):
-
-| row | `std::map` + `std::mutex` | `Cache` | `absl` + `std::mutex` | `absl` + `std::shared_mutex` |
-|---|---|---|---|---|
-| 100000 keys, 1 thread | 723 | 147 | 135 | 194 |
-| 100000 keys, 4 threads | 2569 | 84.4 | 622 | 293 |
-| 64 `int` keys: construct + destroy | 12.5 | 5.7 | 11.5 | 22.4 |
-| 64 `int` keys: get hit | 7.9 | 3.5 | 5.4 | 10.2 |
-| 64 `int` keys: get miss | 8.6 | 3.5 | 5.1 | 10.1 |
-
-Intel i9-9980HK (x86_64, Apple clang 17):
-
-| row | `std::map` + `std::mutex` | `Cache` | `absl` + `std::mutex` | `absl` + `std::shared_mutex` |
-|---|---|---|---|---|
-| 100000 keys, 1 thread | 1098 | 440 | 410 | 445 |
-| 100000 keys, 4 threads | 2713 | 134 | 1789 | 574 |
-| 64 `int` keys: construct + destroy | 62.6 | 24.5 | 50.1 | 81.1 |
-| 64 `int` keys: get hit | 19.1 | 10.6 | 17.1 | 36.7 |
-| 64 `int` keys: get miss | 20.9 | 10.7 | 17.3 | 36.4 |
-
-The `absl` columns appear when abseil is installed (`find_package(absl)`, used only by the
-benchmark). Arguments select the rows: sizes run only those string rows, and `small` adds the
-small-cache rows (no arguments runs 64, 4096 and 100000, then the small-cache rows):
+Both machines use Apple clang 17.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGENERATION_CACHE_BUILD_BENCH=ON
 cmake --build build --target generation_cache_bench
-./build/generation_cache_bench [n ...] [small]
+./build/generation_cache_bench
 ```
 
-## What it isn't
+[docs/perf/](docs/perf/README.md) has every row, the `absl` + `std::mutex`
+column, and the bench's arguments.
 
-- Not an LRU or TTL cache. Entries don't expire individually or by access
-  recency. Use [`lru-cache`](https://github.com/Kronuz/lru-cache) for that.
-- Not lock-free. Each `Cache` instance has one reader/writer lock. For this library's
-  motivating case (an occasional write, many reads composing a moderately
-  expensive result), mutex contention on the cache itself is not the
-  bottleneck; the work it's caching is.
-- Not bounded by itself. Nothing here caps `size()`. In the motivating case,
-  the number of distinct `Key`s ever reachable is naturally bounded by
-  whatever upstream window the `Value`s are computed from (see
-  [ARCHITECTURE.md](ARCHITECTURE.md)); a use case without such a natural bound
-  needs its own cap.
+## 📚 Documentation
 
-## Build & test
+- [docs/API.md](docs/API.md): the class, the reader pattern, thread and
+  exception safety, and hashing.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the race `clear()` closes, the lock, and
+  the container.
+- [docs/perf/](docs/perf/README.md): the full benchmark tables.
+- [CHANGELOG.md](CHANGELOG.md): what changed.
+- [AGENTS.md](AGENTS.md): repository map, invariants, and traps.
+- [Catalog entry](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#generation-cache)
+  in Kronuz C++ Libraries.
+
+## 🛠️ Building and testing
 
 ```sh
-cmake -B build && cmake --build build && ctest --test-dir build
+cmake -B build
+cmake --build build
+ctest --test-dir build
 ```
 
-The test covers the ordinary hit/miss path, `clear()` dropping every entry,
-a stale `try_insert` (captured generation older than current) being silently
-rejected, and a multi-threaded `try_insert`/`clear` race that CI runs under
-TSan and ASan to catch data races. `test/differential.cc` checks the cache
-against a reference implementation. `test/exception_safety.cc` injects throwing
-copies and moves and `std::bad_alloc` at every point of an insert sequence that
-crosses several rehashes, and checks the cache against a `std::map` model after
-each failure.
+The tests cover hits and misses, `clear()`, stale inserts, a threaded
+`try_insert`/`clear` race (run under TSan and ASan in CI), the reader-writer
+lock, a differential check against a reference cache, and injected throws at
+every point of an insert sequence that crosses several rehashes. Add
+`-DGENERATION_CACHE_BUILD_BENCH=ON` to build `generation_cache_bench`.
 
-## Examples
+## 🤝 Contributing
 
-[`examples/demo.cc`](examples/demo.cc) is a runnable tour:
+Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) and the
+catalog's [rules of engagement](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#rules-of-engagement)
+first; CI must pass on every platform.
 
-```sh
-cmake -B build && cmake --build build && ./build/generation_cache_demo
-```
+## 📄 License
 
-It models three readers hitting a warm cache, a source-state change,
-and the cache correctly recomputing once and then re-warming.
-
-## Provenance
-
-Extracted from [Detent](https://github.com/Kronuz/Detent), where it caches
-composed diffs in the distributor's HTTP layer, so many pollers behind the same
-base version share one computed diff. See [ARCHITECTURE.md](ARCHITECTURE.md)
-for the design, [AGENTS.md](AGENTS.md) for the repo map and invariants, and
-[CHANGELOG.md](CHANGELOG.md) for what changed.
-
-## License
-
-MIT, Copyright (c) 2026 Germán Méndez Bravo. See [LICENSE](LICENSE).
+MIT, Copyright (c) 2026 Germán Méndez Bravo. See [LICENSE](LICENSE). Extracted
+from [Detent](https://github.com/Kronuz/Detent), where it caches composed diffs
+so many pollers behind the same base version share one computed diff.
