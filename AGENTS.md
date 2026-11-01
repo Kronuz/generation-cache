@@ -22,6 +22,8 @@ test/lock.cc           The reader-writer lock: readers share, a writer is
                        exclusive, a waiting writer holds new readers back,
                        nobody starves; CTest test `generation_cache_lock`, the
                        program to run under TSan.
+test/first_insert.cc    The table allocates nothing until the first insert, then 4
+                       slots, and doubles; CTest test `generation_cache_first_insert`.
 test/seed.cc           Constructing a Cache cannot throw when the entropy source
                        does (GENERATION_CACHE_ENTROPY); CTest test
                        `generation_cache_seed`.

@@ -99,6 +99,7 @@ spends one atomic operation to enter and one to leave.
 No iteration order is exposed, so the container is free. A hashable `Key`
 (`std::hash` plus `==`) uses `detail::hash_entries`: insert/replace/find/clear
 only (no single-entry erase, hence no tombstones), linear probing, load <= 0.5,
+the first insert allocating 4 slots and each growth doubling,
 the mixed 64-bit hash kept in each slot so most probes never touch the key. Any
 other `Key` uses `detail::ordered_entries`, a thin `std::map` adapter. The
 table mixes a seed into `std::hash` before probing: one value drawn per process

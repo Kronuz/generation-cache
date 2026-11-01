@@ -47,6 +47,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(generation_cache_seed PRIVATE generation_cache Threads::Threads)
   add_test(NAME generation_cache_seed COMMAND generation_cache_seed)
 
+  # The table's first allocation is small and growth doubles from it.
+  add_executable(generation_cache_first_insert test/first_insert.cc)
+  target_link_libraries(generation_cache_first_insert PRIVATE generation_cache)
+  add_test(NAME generation_cache_first_insert COMMAND generation_cache_first_insert)
+
   # Benchmark (not built by default): cmake --build build --target generation_cache_bench
   # The comparator (abseil flat_hash_map) is found only for this target.
   find_package(absl QUIET)

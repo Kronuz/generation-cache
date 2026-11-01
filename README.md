@@ -145,8 +145,8 @@ move-only type whose move can throw gets the basic guarantee instead, as with
 only if its move assignment cannot throw. Constructing a `Cache` never throws.
 
 Entries have no exposed order. When `Key` has a `std::hash` and `operator==`,
-they live in a small open-addressing table: linear probing, load <= 0.5, and the
-64-bit hash stored per slot. The hash is mixed with a seed drawn once per process
+they live in a small open-addressing table: linear probing, load <= 0.5, the
+64-bit hash stored per slot, and 4 slots allocated by the first insert. The hash is mixed with a seed drawn once per process
 (from `std::random_device`, mixed with the clock, the thread id and an address,
 so an entropy source that fails costs quality and never an exception) and varied
 per table, so the index of a key is not a function of `std::hash` alone. The seed

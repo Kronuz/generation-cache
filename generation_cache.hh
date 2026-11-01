@@ -136,6 +136,10 @@ namespace detail {
 		unsigned shift_ = 64;
 		unsigned bits_ = 0;
 
+		// The first insert allocates 2^initial_bits slots, no more: a cache that holds a few
+		// entries pays for a few, and a larger one grows by doubling.
+		static constexpr unsigned initial_bits = 2;
+
 		// Per-table seed folded into the hash before mixing, so the table index of a key is not
 		// a fixed function of std::hash: the process seed varied by the table's address.
 		std::uint64_t seed_ = splitmix64(process_seed() ^ reinterpret_cast<std::uintptr_t>(this));
@@ -154,7 +158,7 @@ namespace detail {
 		// entries are moved only when that cannot throw, otherwise copied, so
 		// a throw leaves the old table untouched.
 		void grow() {
-			const unsigned bits = bits_ ? bits_ + 1 : 4;  // 16 slots first
+			const unsigned bits = bits_ ? bits_ + 1 : initial_bits;
 			const unsigned shift = 64 - bits;
 			std::vector<Slot> next(std::size_t(1) << bits);
 			const std::size_t mask = next.size() - 1;
@@ -211,6 +215,7 @@ namespace detail {
 		}
 		void clear() { slots_.clear(); size_ = 0; shift_ = 64; bits_ = 0; }
 		std::size_t size() const { return size_; }
+		std::size_t capacity() const { return slots_.size(); }
 	};
 
 	// std::map adapter exposing the same four operations.
