@@ -18,12 +18,16 @@ test/exception_safety.cc  Injects throwing Key/Value copies and moves and
                        bad_alloc across several rehashes; checks a std::map
                        model after every failure; CTest test
                        `generation_cache_exception_safety`.
+test/lock.cc           The reader-writer lock: readers share, a writer is
+                       exclusive, a waiting writer holds new readers back,
+                       nobody starves; CTest test `generation_cache_lock`, the
+                       program to run under TSan.
 test/seed.cc           Constructing a Cache cannot throw when the entropy source
                        does (GENERATION_CACHE_ENTROPY); CTest test
                        `generation_cache_seed`.
 bench/bench.cc         Benchmark against std::mutex / std::shared_mutex plus
-                       absl::flat_hash_map; target `generation_cache_bench`,
-                       built only when abseil is found.
+                       absl::flat_hash_map, with small-cache rows; target
+                       `generation_cache_bench`, built only when abseil is found.
 examples/demo.cc       A runnable tour (not a test): a warm cache, a source
                        change, a recompute.
 CMakeLists.txt         Header-only INTERFACE target `generation_cache`
@@ -34,7 +38,7 @@ LICENSE                MIT, Copyright (c) 2026 Germán Méndez Bravo.
 README.md              What it is, install, usage, API, performance, what it isn't.
 CHANGELOG.md           Dated changes.
 ARCHITECTURE.md        Internal design: the race clear() defends against,
-                       the shared lock, the container, why no built-in size bound.
+                       the reader-writer lock, the container, why no built-in size bound.
 ```
 
 Header-only. There is no `.cc` to compile; `generation_cache.hh` is both the
@@ -73,7 +77,7 @@ ASLR) rather than chasing it as a code issue.
 ## Dependencies
 
 None beyond the standard library (ARCHITECTURE.md lists the headers). C++17
-is the floor (`std::optional`, `std::shared_mutex`); nothing here needs C++20.
+is the floor (`std::optional`, `std::shared_lock`); nothing here needs C++20.
 No FetchContent and no third-party library in the library target; the
 benchmark alone uses abseil.
 
@@ -85,10 +89,13 @@ benchmark alone uses abseil.
 - Tabs for indentation, double quotes in code, no em dashes in prose.
 - MIT-licensed; keep the copyright header (Copyright (c) 2026 Germán Méndez
   Bravo) on source files.
-- One `std::shared_mutex` guards the table and the generation counter
+- One `detail::rw_lock` guards the table and the generation counter
   together (see ARCHITECTURE.md's "One lock, shared for reads"). Readers take
   it shared; `try_insert` and `clear` take it exclusively. Don't split it into
   per-bucket locks: the generation check's race-freedom depends on one lock.
+  `test/lock.cc` is the lock's own test; run it under ThreadSanitizer after any
+  change to `rw_lock`, and keep a reader's re-add under the mutex (its
+  correctness argument is in the header).
 - Constructing a `Cache` does not throw. The hash seed comes from
   `detail::process_seed()`, which swallows a failing entropy source;
   `GENERATION_CACHE_ENTROPY` names the source (`test/seed.cc` makes it throw).

@@ -27,8 +27,8 @@ Closing that race is what the generation counter is for.
 
 ## Install
 
-Header-only: `generation_cache.hh` is the whole library. Requires C++17
-(`std::optional`, `std::shared_mutex`) and nothing beyond the standard library.
+Header-only: `generation_cache.hh` is the whole library. Requires C++17 and
+nothing beyond the standard library.
 
 With CMake `FetchContent`:
 
@@ -126,28 +126,23 @@ public:
 - **`clear()`**: drops every entry and advances the generation.
 - **`size()`**: current entry count.
 
-All methods are thread-safe (one internal `std::shared_mutex` guards the table
+All methods are thread-safe. One internal reader-writer lock guards the table
 and the generation counter together, so a lookup and a `clear()` can never
-interleave inconsistently). `get`, `get_with_generation`, `generation` and
-`size` take it shared, so readers run in parallel; `try_insert` and `clear`
-take it exclusively. `std::shared_mutex` has no specified fairness policy
-(glibc prefers readers), so readers that overlap continuously can delay
-`try_insert`/`clear`. Each hold is a single probe, so readers overlap only
-briefly; shard the cache if a workload saturates it with readers.
-`try_insert` has the strong exception guarantee: if anything throws (a `Key`
-copy, a `Value` move or copy, an allocation, the table's rehash), the cache is
-unchanged and still usable. The rehash builds the new table completely before
-it replaces the old one, and moves entries only when `Key` and `Value` are
-nothrow-move-constructible, copying them otherwise. A move-only type whose move
-can throw gets the basic guarantee instead, as with `std::vector`, and
-overwriting an existing key assigns `Value`, which is strong only if its move
-assignment cannot throw. Constructing a `Cache` never throws.
-
-Behavior change: before 2026-10-31 a throw during a rehash (a `Key` or `Value`
-move or copy that throws, or `std::bad_alloc`) lost entries and could leave a
-slot that a later `get` dereferenced while empty; a throwing `Value` move
-assignment on a `Key` with only `operator<` left a default-constructed entry
-behind. Results change only on those throwing paths.
+interleave inconsistently. `get`, `get_with_generation`, `generation` and `size`
+take it shared, so readers run in parallel: a reader enters with one atomic add
+and leaves with one subtract, so a lookup in a small cache costs about what the
+lookup itself costs. `try_insert` and `clear` take it exclusively and wait only
+for the readers already inside; a waiting writer holds new readers back, so
+readers that overlap continuously cannot starve it, on every platform. A `Value`
+copy constructor, `std::hash` and `operator==` run under the lock and must not
+call back into the same cache. `try_insert` has the strong exception guarantee:
+if anything throws (a `Key` copy, a `Value` move or copy, an allocation, the
+table's rehash), the cache is unchanged and still usable. The rehash builds the
+new table completely before it replaces the old one, and moves entries only when
+`Key` and `Value` are nothrow-move-constructible, copying them otherwise. A
+move-only type whose move can throw gets the basic guarantee instead, as with
+`std::vector`, and overwriting an existing key assigns `Value`, which is strong
+only if its move assignment cannot throw. Constructing a `Cache` never throws.
 
 Entries have no exposed order. When `Key` has a `std::hash` and `operator==`,
 they live in a small open-addressing table: linear probing, load <= 0.5, and the
@@ -162,14 +157,36 @@ hashes are unseeded, so a caller that must withstand crafted keys needs its own
 
 ## Performance
 
-Apple arm64, string keys, `get` hit, n = 100000, on a shared machine (absolute
-numbers are noisy): 116 ns per op on one thread and 294 ns at 4 threads.
-`std::shared_mutex` plus `absl::flat_hash_map` measures 99 and 284 ns on the
-same run. The benchmark needs abseil installed:
+String keys of about 30 bytes, `get` hit, ns per op (best of 5, mean of two passes), on
+1 thread and on 4 threads; the comparators are `std::map` behind a `std::mutex` and
+`absl::flat_hash_map` behind a `std::mutex` or a `std::shared_mutex`. A small cache
+holds 64 `int` keys on 1 thread. Apple M4 Pro (arm64, Apple clang 17):
+
+| row | `std::map` + `std::mutex` | `Cache` | `absl` + `std::mutex` | `absl` + `std::shared_mutex` |
+|---|---|---|---|---|
+| 100000 keys, 1 thread | 723 | 147 | 135 | 194 |
+| 100000 keys, 4 threads | 2569 | 84.4 | 622 | 293 |
+| 64 `int` keys: construct + destroy | 12.5 | 5.7 | 11.5 | 22.4 |
+| 64 `int` keys: get hit | 7.9 | 3.5 | 5.4 | 10.2 |
+| 64 `int` keys: get miss | 8.6 | 3.5 | 5.1 | 10.1 |
+
+Intel i9-9980HK (x86_64, Apple clang 17):
+
+| row | `std::map` + `std::mutex` | `Cache` | `absl` + `std::mutex` | `absl` + `std::shared_mutex` |
+|---|---|---|---|---|
+| 100000 keys, 1 thread | 1098 | 440 | 410 | 445 |
+| 100000 keys, 4 threads | 2713 | 134 | 1789 | 574 |
+| 64 `int` keys: construct + destroy | 62.6 | 24.5 | 50.1 | 81.1 |
+| 64 `int` keys: get hit | 19.1 | 10.6 | 17.1 | 36.7 |
+| 64 `int` keys: get miss | 20.9 | 10.7 | 17.3 | 36.4 |
+
+The benchmark needs abseil installed. Arguments select the rows: sizes run only those
+string rows, and `small` adds the small-cache rows (no arguments runs 64, 4096 and
+100000, then the small-cache rows):
 
 ```sh
 cmake -B build && cmake --build build --target generation_cache_bench
-./build/generation_cache_bench
+./build/generation_cache_bench [n ...] [small]
 ```
 
 ## What it isn't

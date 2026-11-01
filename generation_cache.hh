@@ -32,6 +32,7 @@
 // client already has", invalidated whenever the server accepts a new
 // write, is the motivating case.
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -79,6 +80,37 @@ namespace detail {
 		}();
 		return seed;
 	}
+
+	// A reader-writer lock for short critical sections. A reader enters with one atomic add and
+	// leaves with one subtract. A writer takes the mutex, sets the writer flag, which sends new
+	// readers to wait on that mutex, and waits for the readers inside to leave. A waiting writer
+	// therefore holds new readers back on every platform, and writers cannot be starved.
+	class rw_lock {
+		static constexpr std::uint32_t writer = 0x80000000u;
+		std::atomic<std::uint32_t> state_{0};  // readers inside, plus `writer` while a writer holds or waits
+		std::mutex mutex_;                     // held by a writer for its whole critical section
+	public:
+		void lock_shared() {
+			if (!(state_.fetch_add(1, std::memory_order_acquire) & writer)) return;
+			state_.fetch_sub(1, std::memory_order_relaxed);
+			// A writer has the mutex until it clears the flag, and no writer can set the flag
+			// without the mutex, so with the mutex held this add cannot meet the flag.
+			std::lock_guard<std::mutex> turn(mutex_);
+			state_.fetch_add(1, std::memory_order_acquire);
+		}
+		void unlock_shared() noexcept { state_.fetch_sub(1, std::memory_order_release); }
+		void lock() {
+			mutex_.lock();
+			state_.fetch_or(writer, std::memory_order_acquire);
+			for (unsigned spins = 0; (state_.load(std::memory_order_acquire) & ~writer) != 0; ++spins) {
+				if (spins >= 64) std::this_thread::yield();
+			}
+		}
+		void unlock() noexcept {
+			state_.fetch_and(~writer, std::memory_order_release);
+			mutex_.unlock();
+		}
+	};
 
 	// A Key is "hashable" when std::hash<Key> is enabled and operator== exists.
 	template <typename Key, typename = void>
@@ -228,14 +260,14 @@ public:
 	// separately from a lookup (e.g. before deciding a key isn't even
 	// worth looking up).
 	[[nodiscard]] Generation generation() const {
-		std::shared_lock<std::shared_mutex> lock(mutex_);
+		std::shared_lock<detail::rw_lock> lock(mutex_);
 		return generation_;
 	}
 
 	// A plain lookup, no generation returned -- use this when the caller
 	// has nothing to insert on a miss (a read-only consumer).
 	[[nodiscard]] std::optional<Value> get(const Key& key) const {
-		std::shared_lock<std::shared_mutex> lock(mutex_);
+		std::shared_lock<detail::rw_lock> lock(mutex_);
 		const Value* v = entries_.find(key);
 		if (!v) return std::nullopt;
 		return *v;
@@ -245,7 +277,7 @@ public:
 	// Use this when a miss means "I'm about to compute this myself and
 	// will want to try_insert() the result".
 	[[nodiscard]] Lookup get_with_generation(const Key& key) const {
-		std::shared_lock<std::shared_mutex> lock(mutex_);
+		std::shared_lock<detail::rw_lock> lock(mutex_);
 		Lookup result;
 		result.generation = generation_;
 		if (const Value* v = entries_.find(key)) result.value = *v;
@@ -259,7 +291,7 @@ public:
 	// Safe to call with a stale generation: never throws, never corrupts
 	// an already-current entry with an outdated one.
 	bool try_insert(const Key& key, Value value, Generation at_generation) {
-		std::unique_lock<std::shared_mutex> lock(mutex_);
+		std::unique_lock<detail::rw_lock> lock(mutex_);
 		if (generation_ != at_generation) return false;
 		entries_.insert_or_assign(key, std::move(value));
 		return true;
@@ -270,20 +302,20 @@ public:
 	// before this clear(), finished after) silently no-ops instead of
 	// resurrecting a value that's no longer valid against whatever changed.
 	void clear() {
-		std::unique_lock<std::shared_mutex> lock(mutex_);
+		std::unique_lock<detail::rw_lock> lock(mutex_);
 		entries_.clear();
 		++generation_;
 	}
 
 	[[nodiscard]] std::size_t size() const {
-		std::shared_lock<std::shared_mutex> lock(mutex_);
+		std::shared_lock<detail::rw_lock> lock(mutex_);
 		return entries_.size();
 	}
 
 private:
-	// Readers share the lock; try_insert and clear are exclusive. Fairness is
-	// unspecified (glibc prefers readers); see the README.
-	mutable std::shared_mutex mutex_;
+	// Readers share the lock; try_insert and clear are exclusive, and a waiting writer holds
+	// new readers back; see the README.
+	mutable detail::rw_lock mutex_;
 	typename detail::entries_for<Key, Value>::type entries_;
 	Generation generation_ = 0;
 };

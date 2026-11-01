@@ -12,9 +12,10 @@ A single header, nothing else:
 ```
 
 No compiled translation unit, no external dependency. `generation_cache.hh`
-includes only standard headers: `<chrono>`, `<cstdint>`, `<functional>`,
-`<map>`, `<mutex>`, `<optional>`, `<random>`, `<shared_mutex>`, `<thread>`,
-`<type_traits>`, `<vector>`, and `<utility>`.
+includes only standard headers: `<atomic>`, `<chrono>`, `<cstdint>`,
+`<functional>`, `<map>`, `<mutex>`, `<optional>`, `<random>`, `<shared_mutex>`
+(for `std::shared_lock`), `<thread>`, `<type_traits>`, `<vector>`, and
+`<utility>`.
 
 ## The problem this solves
 
@@ -72,12 +73,26 @@ holding a lock across the whole compute.
 
 ## One lock, shared for reads
 
-The table and the generation counter are guarded by one `std::shared_mutex`.
-Readers (`get`, `get_with_generation`, `generation`, `size`) take it shared;
-`try_insert` and `clear` take it exclusively, and `try_insert` checks the
-generation under that exclusive lock, so the check stays race-free against
-`clear()`, the property the whole design depends on. A reader's table probe is
-short, so a single lock is enough; there is no finer-grained locking.
+The table and the generation counter are guarded by one reader-writer lock
+(`detail::rw_lock`). Readers (`get`, `get_with_generation`, `generation`,
+`size`) take it shared; `try_insert` and `clear` take it exclusively, and
+`try_insert` checks the generation under that exclusive lock, so the check stays
+race-free against `clear()`, the property the whole design depends on. A
+reader's table probe is short, so a single lock is enough; there is no
+finer-grained locking.
+
+The lock is one atomic word and one `std::mutex`. A reader adds 1 to the word
+and, if the writer flag is not set, is in; it leaves by subtracting 1. A writer
+takes the mutex, sets the flag with an atomic or, and waits (spinning, then
+yielding) until the readers inside have left; it clears the flag and releases
+the mutex when it is done. A reader that finds the flag set takes its add back,
+waits for the mutex, and adds again while holding it, which cannot meet the flag:
+no writer sets it without the mutex. So a waiting writer holds new readers back,
+a stream of readers cannot starve a writer, and a writer waits only for the
+readers already inside. `std::shared_mutex` makes two mutex round trips per
+shared lock on libc++, and leaves its fairness to the platform (glibc prefers
+readers); on a short critical section the lock's own cost shows, so this one
+spends one atomic operation to enter and one to leave.
 
 ## Container choice
 

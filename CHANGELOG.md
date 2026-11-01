@@ -27,6 +27,14 @@ releases, so entries are dated.
 
 ### Changed
 
+- Readers take a one-word reader-writer lock (`detail::rw_lock`) instead of
+  `std::shared_mutex`: an atomic add to enter, an atomic subtract to leave, and a
+  `std::mutex` that only writers and the readers they hold back use. On a short critical
+  section `std::shared_mutex` was most of the cost of a lookup (libc++ takes two mutex round
+  trips per shared lock), and `get` on a 64-entry cache was slower than the `std::mutex` it
+  replaced (audit finding CA4). A waiting writer now holds new readers back on every
+  platform, where the fairness of `std::shared_mutex` was the platform's (glibc prefers
+  readers), so continuous readers cannot starve `try_insert` or `clear`.
 - The hash table folds a per-cache random seed into `std::hash` before mixing,
   so a key set cannot be crafted offline to collide in every cache (CR4).
 - The README and header document `std::shared_mutex` fairness (CR4).
@@ -44,7 +52,11 @@ releases, so entries are dated.
 ### Added
 
 - `test/seed.cc`: a `Cache` is constructed, filled across several rehashes and cleared while
-  the entropy source throws.
+  the entropy source throws, and the default constructor is `static_assert`ed nothrow.
+- `test/lock.cc`: readers share the lock, a writer is exclusive, a waiting writer holds new
+  readers back, and neither side starves; the program to run under ThreadSanitizer.
+- Small-cache rows in `bench/bench.cc` (construct and destroy, get hit and miss with 64 `int`
+  keys). `generation_cache_bench` takes sizes and `small` as arguments.
 
 ### Performance
 
@@ -55,6 +67,41 @@ n = 100000, 12 interleaved runs each, a copy of the old binary as the A/A
 control), mean ns: `get` on 1 thread 393 old, 392 new (old copy 392); 4 threads
 118 old, 121 new (old copy 127); fill 356 old, 354 new. The difference is inside
 the A/A spread.
+
+### Performance of the lock and the seed
+
+The audit's probe (`extra_bench.cc`), ns, mean of two passes: `start` is 00762bd (a `std::map`
+behind a `std::mutex`), `before` is 3a0a744, `after` is this change.
+
+| row | arm64 start | before | after | x86_64 start | before | after |
+|---|---|---|---|---|---|---|
+| construct and destroy | 12.2 | 80.9 | 5.80 | 54.0 | 291 | 25.1 |
+| construct, insert once, destroy | 35.9 | 128 | 37.5 | 134 | 492 | 188 |
+| 64 `int` keys: get hit | 7.83 | 11.9 | 3.63 | 18.4 | 37.7 | 10.0 |
+| 64 `int` keys: get miss | 8.43 | 11.7 | 3.81 | 20.4 | 37.7 | 10.4 |
+| fill 256, then clear (per insert) | 30.2 | 30.5 | 12.2 | 92.9 | 81.3 | 45.0 |
+
+String keys of about 30 bytes, `get` hit, n = 100000, ns per op (`generation_cache_bench`, mean of two
+passes; `before` is 3a0a744):
+
+| row | arm64 before | after | x86_64 before | after |
+|---|---|---|---|---|
+| 100000 keys, 1 thread | 315 | 147 | 481 | 440 |
+| 100000 keys, 4 threads | 333 | 84.4 | 593 | 134 |
+
+The first insert into an empty cache allocates the 16-slot table, which costs more than the
+`std::map` node it replaced (construct, insert once and destroy: 36 to 38 ns on arm64, 134 to
+188 ns on x86_64; 3a0a744 took 128 and 492). Inserting into a cache that has a table is faster
+than into a `std::map` (fill 256, then clear, per insert: 30 to 12 ns on arm64, 93 to 45 on
+x86_64).
+
+The gap to `absl::flat_hash_map` at 100000 keys on one thread was the lock. The cache now
+matches abseil behind a `std::shared_mutex` (arm64 147 against 194 ns, x86_64 440 against 445)
+and stays within 9% of it behind a `std::mutex` (135 and 410), the spread of that row being up
+to 20%. With one lock under both tables (a copy of each in the benchmark's decomposition
+harness) this table is 8% faster than abseil's on arm64 (166 against 181 ns) and 9% slower on
+x86_64 (449 against 411). A tag-byte layout that probes one byte per slot was no faster (179 to
+183 ns on arm64, 456 to 463 on x86_64), so the table is unchanged.
 
 ## 2026-10-30
 

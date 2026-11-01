@@ -36,6 +36,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(generation_cache_exception_safety PRIVATE generation_cache Threads::Threads)
   add_test(NAME generation_cache_exception_safety COMMAND generation_cache_exception_safety)
 
+  # The reader-writer lock: readers share, a writer is exclusive, a waiting writer holds new readers
+  # back, nobody starves. Also the program to run under ThreadSanitizer.
+  add_executable(generation_cache_lock test/lock.cc)
+  target_link_libraries(generation_cache_lock PRIVATE generation_cache Threads::Threads)
+  add_test(NAME generation_cache_lock COMMAND generation_cache_lock)
+
   # Constructing a Cache cannot throw, even when the entropy source for the hash seed does.
   add_executable(generation_cache_seed test/seed.cc)
   target_link_libraries(generation_cache_seed PRIVATE generation_cache Threads::Threads)

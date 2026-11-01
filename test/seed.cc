@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 struct ThrowingEntropy {
 	ThrowingEntropy() { throw std::runtime_error("no entropy source"); }
@@ -16,6 +17,8 @@ struct ThrowingEntropy {
 #include "generation_cache.hh"
 
 using IntCache = generation_cache::Cache<int, int>;
+static_assert(std::is_nothrow_default_constructible_v<IntCache>);
+static_assert(std::is_nothrow_default_constructible_v<generation_cache::Cache<std::string, std::string>>);
 
 int main() {
 	// The seed still comes out: nonzero and the same for the whole process.
